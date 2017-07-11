@@ -3,6 +3,7 @@ name = "pistoncore-winit_window"
 version = "0.1.0"
 authors = ["Layl <LaylConway@users.noreply.github.com>"]
 keywords = ["winit", "window", "piston"]
+description = "A winit back-end for pistoncore-window"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/pistondevelopers/winit_window.git"
