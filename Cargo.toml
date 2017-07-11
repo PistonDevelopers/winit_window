@@ -1,0 +1,20 @@
+[package]
+name = "pistoncore-winit_window"
+version = "0.1.0"
+authors = ["Layl <LaylConway@users.noreply.github.com>"]
+keywords = ["winit", "window", "piston"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/pistondevelopers/winit_window.git"
+homepage = "https://github.com/pistondevelopers/winit_window"
+
+[lib]
+name = "winit_window"
+path = "src/lib.rs"
+
+[dependencies]
+winit = "0.7"
+vulkano = "0.5"
+vulkano-win = "0.5"
+pistoncore-input = "0.18.0"
+pistoncore-window = "0.27.0"
