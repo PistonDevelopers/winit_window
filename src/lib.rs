@@ -11,7 +11,7 @@ use std::collections::{VecDeque};
 use vulkano::swapchain::{Surface};
 use vulkano::instance::{Instance, InstanceExtensions};
 use vulkano_win::{VkSurfaceBuild, Window as VulkanoWinWindow};
-use winit::{EventsLoop, WindowBuilder, Event as WinitEvent, WindowEvent, ElementState, MouseButton as WinitMouseButton, KeyboardInput};
+use winit::{EventsLoop, WindowBuilder, Event as WinitEvent, WindowEvent, ElementState, MouseButton as WinitMouseButton, KeyboardInput, MouseScrollDelta};
 use input::{Input, EventId, CloseArgs, Motion, Button, MouseButton, Key};
 use window::{Window, Size};
 
@@ -113,7 +113,13 @@ fn push_events_for(event: WinitEvent, queue: &mut VecDeque<Input>) {
     let event = match event {
         WinitEvent::WindowEvent { event: ev, .. } => {
             match ev {
+                WindowEvent::Resized(w, h) => Input::Resize(w, h),
                 WindowEvent::Closed => Input::Close(CloseArgs),
+                WindowEvent::DroppedFile(path) => {
+                    // TODO: This event needs to be added to pistoncore-input, see issue
+                    //  PistonDevelopers/piston#1117
+                    Input::Custom(EventId("DroppedFile"), Arc::new(path))
+                },
                 WindowEvent::ReceivedCharacter(c) => {
                     match c {
                         // Ignore control characters
@@ -126,11 +132,22 @@ fn push_events_for(event: WinitEvent, queue: &mut VecDeque<Input>) {
 
                     Input::Text(c.to_string())
                 },
+                WindowEvent::Focused(focused) => Input::Focus(focused),
                 WindowEvent::KeyboardInput { device_id: _, input } => {
                     map_keyboard_input(&input)
                 },
                 WindowEvent::MouseMoved { device_id: _, position } =>
                     Input::Move(Motion::MouseCursor(position.0, position.1)),
+                WindowEvent::MouseEntered { device_id: _ } => Input::Cursor(true),
+                WindowEvent::MouseLeft { device_id: _ } => Input::Cursor(false),
+                WindowEvent::MouseWheel { device_id: _, delta, phase: _ } => {
+                    match delta {
+                        MouseScrollDelta::PixelDelta(x, y) =>
+                            Input::Move(Motion::MouseScroll(x as f64, y as f64)),
+                        MouseScrollDelta::LineDelta(x, y) =>
+                            Input::Move(Motion::MouseScroll(x as f64, y as f64)),
+                    }
+                },
                 WindowEvent::MouseInput { device_id: _, state, button } => {
                     let button = map_mouse_button(button);
                     if state == ElementState::Pressed {
