@@ -1,6 +1,6 @@
 [package]
 name = "pistoncore-winit_window"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Layl <LaylConway@users.noreply.github.com>"]
 keywords = ["winit", "window", "piston"]
 description = "A winit back-end for pistoncore-window"
