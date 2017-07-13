@@ -24,7 +24,6 @@ pub struct WinitWindow {
     pub events_loop: EventsLoop,
     pub surface: Arc<Surface>,
 
-    size: Size,
     should_close: bool,
     queued_events: VecDeque<Input>,
 }
@@ -45,7 +44,6 @@ impl WinitWindow {
             events_loop,
             surface,
 
-            size,
             should_close: false,
             queued_events: VecDeque::new(),
         }
@@ -62,13 +60,13 @@ impl Window for WinitWindow {
     }
 
     fn size(&self) -> Size {
-        // TODO: Report outer size rather than inner size
-        self.size
+        self.window.window().get_outer_size()
+            .unwrap_or((1, 1)).into()
     }
 
     fn swap_buffers(&mut self) {
-        // TODO: Unclear what to do here, we don't have buffers to swap
-        unimplemented!()
+        // This window backend was made for use with a vulkan renderer that handles swapping by
+        //  itself, if you need it here open up an issue
     }
 
     fn wait_event(&mut self) -> Input {
@@ -103,7 +101,8 @@ impl Window for WinitWindow {
     }
 
     fn draw_size(&self) -> Size {
-        self.size
+        self.window.window().get_inner_size()
+            .unwrap_or((1, 1)).into()
     }
 }
 
