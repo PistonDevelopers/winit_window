@@ -114,7 +114,18 @@ fn push_events_for(event: WinitEvent, queue: &mut VecDeque<Input>) {
         WinitEvent::WindowEvent { event: ev, .. } => {
             match ev {
                 WindowEvent::Closed => Input::Close(CloseArgs),
-                WindowEvent::ReceivedCharacter(c) => Input::Text(c.to_string()),
+                WindowEvent::ReceivedCharacter(c) => {
+                    match c {
+                        // Ignore control characters
+                        '\u{7f}' | // Delete
+                        '\u{1b}' | // Escape
+                        '\u{8}'  | // Backspace
+                        '\r' | '\n' | '\t' => return,
+                        _ => ()
+                    };
+
+                    Input::Text(c.to_string())
+                },
                 WindowEvent::KeyboardInput { device_id: _, input } => {
                     map_keyboard_input(&input)
                 },
