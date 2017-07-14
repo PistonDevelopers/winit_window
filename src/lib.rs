@@ -13,7 +13,7 @@ use vulkano::instance::{Instance, InstanceExtensions};
 use vulkano_win::{VkSurfaceBuild, Window as VulkanoWinWindow};
 use winit::{EventsLoop, WindowBuilder, Event as WinitEvent, WindowEvent, ElementState, MouseButton as WinitMouseButton, KeyboardInput, MouseScrollDelta};
 use input::{Input, EventId, CloseArgs, Motion, Button, MouseButton, Key};
-use window::{Window, Size};
+use window::{Window, Size, WindowSettings};
 
 pub fn required_extensions() -> InstanceExtensions {
     vulkano_win::required_extensions()
@@ -29,11 +29,11 @@ pub struct WinitWindow {
 }
 
 impl WinitWindow {
-    pub fn new_vulkano(instance: Arc<Instance>, title: &str, size: Size) -> Self {
+    pub fn new_vulkano(instance: Arc<Instance>, settings: &WindowSettings) -> Self {
         let events_loop = EventsLoop::new();
         let window = WindowBuilder::new()
-            .with_dimensions(size.width, size.height)
-            .with_title(title)
+            .with_dimensions(settings.get_size().width, settings.get_size().height)
+            .with_title(settings.get_title())
             .build_vk_surface(&events_loop, instance)
             .unwrap();
 
