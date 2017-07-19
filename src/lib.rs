@@ -27,6 +27,8 @@ pub struct WinitWindow {
 
     should_close: bool,
     queued_events: VecDeque<Input>,
+    last_cursor: (f64, f64),
+    cursor_accumulator: (f64, f64),
 
     title: String,
     capture_cursor: bool,
@@ -50,6 +52,8 @@ impl WinitWindow {
 
             should_close: false,
             queued_events: VecDeque::new(),
+            last_cursor: (0.0, 0.0),
+            cursor_accumulator: (0.0, 0.0),
 
             title: settings.get_title(),
             capture_cursor: false,
@@ -73,7 +77,27 @@ impl Window for WinitWindow {
 
     fn swap_buffers(&mut self) {
         // This window backend was made for use with a vulkan renderer that handles swapping by
-        //  itself, if you need it here open up an issue
+        //  itself, if you need it here open up an issue. What we can use this for however is
+        //  detecting the end of a frame, which we can use to gather up cursor_accumulator data.
+
+        if self.capture_cursor {
+            let mut center = self.window.window().get_inner_size().unwrap_or((2, 2));
+            center.0 /= 2;
+            center.1 /= 2;
+
+            // Center-lock the cursor if we're using capture_cursor
+            self.window.window().set_cursor_position(
+                center.0 as i32, center.1 as i32
+            ).unwrap();
+
+            // Create a relative input based on the distance from the center
+            self.queued_events.push_back(Input::Move(Motion::MouseRelative(
+                self.cursor_accumulator.0,
+                self.cursor_accumulator.1,
+            )));
+
+            self.cursor_accumulator = (0.0, 0.0);
+        }
     }
 
     fn wait_event(&mut self) -> Input {
@@ -96,9 +120,13 @@ impl Window for WinitWindow {
         {
             let queued_events = &mut self.queued_events;
             let capture_cursor = self.capture_cursor;
-            let window = &self.window;
+            let last_cursor = &mut self.last_cursor;
+            let cursor_accumulator = &mut self.cursor_accumulator;
             self.events_loop.poll_events(|event| {
-                push_events_for(event, queued_events, capture_cursor, center, window)
+                push_events_for(
+                    event, queued_events, capture_cursor, center,
+                    last_cursor, cursor_accumulator,
+                )
             });
         }
 
@@ -145,6 +173,11 @@ impl AdvancedWindow for WinitWindow {
 
         if value {
             self.window.window().set_cursor_state(CursorState::Grab).unwrap();
+            self.cursor_accumulator = (0.0, 0.0);
+            let mut center = self.window.window().get_inner_size().unwrap_or((2, 2));
+            center.0 /= 2;
+            center.1 /= 2;
+            self.last_cursor = (center.0 as f64, center.1 as f64);
         } else {
             self.window.window().set_cursor_state(CursorState::Normal).unwrap();
         }
@@ -171,7 +204,8 @@ impl AdvancedWindow for WinitWindow {
 
 fn push_events_for(
     event: WinitEvent, queue: &mut VecDeque<Input>,
-    capture_cursor: bool, center: (u32, u32), window: &VulkanoWinWindow,
+    capture_cursor: bool, center: (u32, u32),
+    last_cursor: &mut (f64, f64), cursor_accumulator: &mut (f64, f64),
 ) {
     let unsupported_input = Input::Custom(EventId("Unsupported Winit Event"), Arc::new(0));
 
@@ -203,24 +237,20 @@ fn push_events_for(
                 },
                 WindowEvent::MouseMoved { device_id: _, position } => {
                     if capture_cursor {
-                        // Skip if the position is at the center and we have capture_cursor, this
-                        //  probably is from cursor center lock, or irrelevant.
+                        let prev_last_cursor = *last_cursor;
+                        *last_cursor = position;
+
+                        // Don't track distance if the position is at the center, this probably is
+                        //  from cursor center lock, or irrelevant.
                         if position.0 as u32 == center.0 && position.1 as u32 == center.1 {
                             return;
                         }
 
-                        // Center-lock the cursor if we're using capture_cursor
-                        window.window().set_cursor_position(
-                            center.0 as i32, center.1 as i32
-                        ).unwrap();
+                        // Add the distance to the tracked cursor movement
+                        cursor_accumulator.0 += position.0 - prev_last_cursor.0 as f64;
+                        cursor_accumulator.1 += position.1 - prev_last_cursor.1 as f64;
 
-                        // Create a relative input based on the distance from the center
-                        // TODO: This can still result in double movement as there may be multiple
-                        //  mouse move events raised before the center-lock gets applied.
-                        Input::Move(Motion::MouseRelative(
-                            position.0 as f64 - center.0 as f64,
-                            position.1 as f64 - center.1 as f64,
-                        ))
+                        return;
                     } else {
                         Input::Move(Motion::MouseCursor(position.0, position.1))
                     }
