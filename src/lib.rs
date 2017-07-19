@@ -96,14 +96,10 @@ impl Window for WinitWindow {
         {
             let queued_events = &mut self.queued_events;
             let capture_cursor = self.capture_cursor;
+            let window = &self.window;
             self.events_loop.poll_events(|event| {
-                push_events_for(event, queued_events, capture_cursor, center)
+                push_events_for(event, queued_events, capture_cursor, center, window)
             });
-        }
-
-        // Center-lock the cursor if we're using capture_cursor
-        if self.capture_cursor {
-            self.window.window().set_cursor_position(center.0 as i32, center.1 as i32).unwrap();
         }
 
         // Get the first event in the queue
@@ -175,7 +171,7 @@ impl AdvancedWindow for WinitWindow {
 
 fn push_events_for(
     event: WinitEvent, queue: &mut VecDeque<Input>,
-    capture_cursor: bool, center: (u32, u32),
+    capture_cursor: bool, center: (u32, u32), window: &VulkanoWinWindow,
 ) {
     let unsupported_input = Input::Custom(EventId("Unsupported Winit Event"), Arc::new(0));
 
@@ -206,14 +202,28 @@ fn push_events_for(
                     map_keyboard_input(&input)
                 },
                 WindowEvent::MouseMoved { device_id: _, position } => {
-                    // Skip if the position is at the center and we have capture_cursor, this
-                    //  probably is from cursor center lock, or irrelevant.
-                    if capture_cursor &&
-                       position.0 as u32 == center.0 && position.1 as u32 == center.1 {
-                        return;
-                    }
+                    if capture_cursor {
+                        // Skip if the position is at the center and we have capture_cursor, this
+                        //  probably is from cursor center lock, or irrelevant.
+                        if position.0 as u32 == center.0 && position.1 as u32 == center.1 {
+                            return;
+                        }
 
-                    Input::Move(Motion::MouseCursor(position.0, position.1))
+                        // Center-lock the cursor if we're using capture_cursor
+                        window.window().set_cursor_position(
+                            center.0 as i32, center.1 as i32
+                        ).unwrap();
+
+                        // Create a relative input based on the distance from the center
+                        // TODO: This can still result in double movement as there may be multiple
+                        //  mouse move events raised before the center-lock gets applied.
+                        Input::Move(Motion::MouseRelative(
+                            position.0 as f64 - center.0 as f64,
+                            position.1 as f64 - center.1 as f64,
+                        ))
+                    } else {
+                        Input::Move(Motion::MouseCursor(position.0, position.1))
+                    }
                 },
                 WindowEvent::MouseEntered { device_id: _ } => Input::Cursor(true),
                 WindowEvent::MouseLeft { device_id: _ } => Input::Cursor(false),
