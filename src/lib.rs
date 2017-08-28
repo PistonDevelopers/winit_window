@@ -381,7 +381,7 @@ fn map_keyboard_input(input: &KeyboardInput) -> Input {
     Input::Button(ButtonArgs {
         state: state,
         button: Button::Keyboard(key),
-        scancode: None,
+        scancode: Some(input.scancode as i32),
     })
 }
 
