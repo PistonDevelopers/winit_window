@@ -12,7 +12,7 @@ use vulkano::swapchain::{Surface};
 use vulkano::instance::{Instance, InstanceExtensions};
 use vulkano_win::{VkSurfaceBuild, Window as VulkanoWinWindow};
 use winit::{EventsLoop, WindowBuilder, Event as WinitEvent, WindowEvent, ElementState, MouseButton as WinitMouseButton, KeyboardInput, MouseScrollDelta, CursorState};
-use input::{Input, EventId, CloseArgs, Motion, Button, MouseButton, Key};
+use input::{Input, CloseArgs, Motion, Button, MouseButton, Key, ButtonState, ButtonArgs};
 use window::{Window, Size, WindowSettings, Position, AdvancedWindow};
 
 pub fn required_extensions() -> InstanceExtensions {
@@ -207,18 +207,16 @@ fn push_events_for(
     capture_cursor: bool, center: (u32, u32),
     last_cursor: &mut (f64, f64), cursor_accumulator: &mut (f64, f64),
 ) {
-    let unsupported_input = Input::Custom(EventId("Unsupported Winit Event"), Arc::new(0));
-
-    let event = match event {
+    match event {
         WinitEvent::WindowEvent { event: ev, .. } => {
             match ev {
-                WindowEvent::Resized(w, h) => Input::Resize(w, h),
-                WindowEvent::Closed => Input::Close(CloseArgs),
-                WindowEvent::DroppedFile(path) => {
-                    // TODO: This event needs to be added to pistoncore-input, see issue
-                    //  PistonDevelopers/piston#1117
-                    Input::Custom(EventId("DroppedFile"), Arc::new(path))
-                },
+                WindowEvent::Resized(w, h) => queue.push_back(Input::Resize(w, h)),
+                WindowEvent::Closed => queue.push_back(Input::Close(CloseArgs)),
+                // TODO: This event needs to be added to pistoncore-input, see issue
+                //  PistonDevelopers/piston#1117
+                //WindowEvent::DroppedFile(path) => {
+                //    Input::Custom(EventId("DroppedFile"), Arc::new(path))
+                //},
                 WindowEvent::ReceivedCharacter(c) => {
                     match c {
                         // Ignore control characters
@@ -229,11 +227,11 @@ fn push_events_for(
                         _ => ()
                     };
 
-                    Input::Text(c.to_string())
+                    queue.push_back(Input::Text(c.to_string()));
                 },
-                WindowEvent::Focused(focused) => Input::Focus(focused),
+                WindowEvent::Focused(focused) => queue.push_back(Input::Focus(focused)),
                 WindowEvent::KeyboardInput { device_id: _, input } => {
-                    map_keyboard_input(&input)
+                    queue.push_back(map_keyboard_input(&input));
                 },
                 WindowEvent::MouseMoved { device_id: _, position } => {
                     if capture_cursor {
@@ -252,34 +250,40 @@ fn push_events_for(
 
                         return;
                     } else {
-                        Input::Move(Motion::MouseCursor(position.0, position.1))
+                        queue.push_back(Input::Move(Motion::MouseCursor(position.0, position.1)));
                     }
                 },
-                WindowEvent::MouseEntered { device_id: _ } => Input::Cursor(true),
-                WindowEvent::MouseLeft { device_id: _ } => Input::Cursor(false),
+                WindowEvent::MouseEntered { device_id: _ } =>
+                    queue.push_back(Input::Cursor(true)),
+                WindowEvent::MouseLeft { device_id: _ } =>
+                    queue.push_back(Input::Cursor(false)),
                 WindowEvent::MouseWheel { device_id: _, delta, phase: _ } => {
-                    match delta {
+                    queue.push_back(match delta {
                         MouseScrollDelta::PixelDelta(x, y) =>
                             Input::Move(Motion::MouseScroll(x as f64, y as f64)),
                         MouseScrollDelta::LineDelta(x, y) =>
                             Input::Move(Motion::MouseScroll(x as f64, y as f64)),
-                    }
+                    });
                 },
                 WindowEvent::MouseInput { device_id: _, state, button } => {
                     let button = map_mouse_button(button);
-                    if state == ElementState::Pressed {
-                        Input::Press(Button::Mouse(button))
+                    let state = if state == ElementState::Pressed {
+                        ButtonState::Press
                     } else {
-                        Input::Release(Button::Mouse(button))
-                    }
+                        ButtonState::Release
+                    };
+
+                    queue.push_back(Input::Button(ButtonArgs {
+                        state: state,
+                        button: Button::Mouse(button),
+                        scancode: None,
+                    }));
                 },
-                _ => unsupported_input,
+                _ => (),
             }
         },
-        _ => unsupported_input,
-    };
-
-    queue.push_back(event);
+        _ => (),
+    }
 }
 
 fn map_keyboard_input(input: &KeyboardInput) -> Input {
@@ -368,11 +372,17 @@ fn map_keyboard_input(input: &KeyboardInput) -> Input {
         Key::Unknown
     };
 
-    if input.state == ElementState::Pressed {
-        Input::Press(Button::Keyboard(key))
+    let state = if input.state == ElementState::Pressed {
+        ButtonState::Press
     } else {
-        Input::Release(Button::Keyboard(key))
-    }
+        ButtonState::Release
+    };
+
+    Input::Button(ButtonArgs {
+        state: state,
+        button: Button::Keyboard(key),
+        scancode: None,
+    })
 }
 
 fn map_mouse_button(button: WinitMouseButton) -> MouseButton {

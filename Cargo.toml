@@ -1,6 +1,6 @@
 [package]
 name = "pistoncore-winit_window"
-version = "0.3.0"
+version = "0.4.0"
 authors = ["Layl <LaylConway@users.noreply.github.com>"]
 keywords = ["winit", "window", "piston"]
 description = "A winit back-end for pistoncore-window"
@@ -17,5 +17,5 @@ path = "src/lib.rs"
 winit = "0.7"
 vulkano = "0.6"
 vulkano-win = "0.6"
-pistoncore-input = "0.18"
-pistoncore-window = "0.27"
+pistoncore-input = "0.19"
+pistoncore-window = "0.28"
