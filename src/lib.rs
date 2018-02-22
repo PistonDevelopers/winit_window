@@ -71,8 +71,9 @@ impl Window for WinitWindow {
     }
 
     fn size(&self) -> Size {
-        self.window.window().get_outer_size()
-            .unwrap_or((1, 1)).into()
+        let (w, h) = self.window.window().get_inner_size().unwrap_or((1, 1));
+        let hidpi = self.window.window().hidpi_factor();
+        ((w as f32 / hidpi) as u32, (h as f32 / hidpi) as u32).into()
     }
 
     fn swap_buffers(&mut self) {
@@ -199,6 +200,15 @@ impl AdvancedWindow for WinitWindow {
     fn set_position<P: Into<Position>>(&mut self, val: P) {
         let val = val.into();
         self.window.window().set_position(val.x, val.y)
+    }
+
+    fn set_size<S: Into<Size>>(&mut self, size: S) {
+        let size: Size = size.into();
+        let hidpi = self.window.window().hidpi_factor();
+        self.window.window().set_inner_size(
+            (size.width as f32 * hidpi) as u32,
+            (size.height as f32 * hidpi) as u32
+        );
     }
 }
 
