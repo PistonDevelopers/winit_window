@@ -228,15 +228,18 @@ impl AdvancedWindow for WinitWindow {
             return;
         }
 
+        let window = self.get_window();
         if value {
-            self.get_window().grab_cursor(true).unwrap();
+            window.grab_cursor(true).unwrap();
+            window.hide_cursor(true);
             self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
             let mut center = self.get_window().get_inner_size().unwrap_or(LogicalSize::new(2., 2.));
             center.width /= 2.;
             center.height /= 2.;
             self.last_cursor = LogicalPosition::new(center.width, center.height);
         } else {
-            self.get_window().grab_cursor(false).unwrap();
+            window.grab_cursor(false).unwrap();
+            window.hide_cursor(false);
         }
         self.capture_cursor = value;
     }
