@@ -31,7 +31,7 @@ use winit::{
     MouseScrollDelta,
     dpi::{LogicalPosition, LogicalSize}
 };
-use input::{Input, CloseArgs, Motion, Button, MouseButton, Key, ButtonState, ButtonArgs};
+use input::{Input, CloseArgs, Motion, Button, MouseButton, Key, ButtonState, ButtonArgs, Event, ResizeArgs};
 use window::{Window, Size, WindowSettings, Position, AdvancedWindow};
 
 #[cfg(feature="use-vulkano")]
@@ -48,7 +48,7 @@ pub struct WinitWindow {
     window: OriginalWinitWindow,
 
     should_close: bool,
-    queued_events: VecDeque<Input>,
+    queued_events: VecDeque<Event>,
     last_cursor: LogicalPosition,
     cursor_accumulator: LogicalPosition,
 
@@ -114,6 +114,89 @@ impl WinitWindow {
     pub fn get_window(&self) -> &OriginalWinitWindow {
         &self.window
     }
+
+    fn handle_event(&mut self, event: winit::Event, center: LogicalSize) {
+        match event {
+            WinitEvent::WindowEvent { event: ev, .. } => {
+                match ev {
+                    WindowEvent::Resized(size) => self.queued_events.push_back(Event::Input(Input::Resize(ResizeArgs {
+                        window_size: [size.width, size.height],
+                        draw_size: Size {width: size.width, height: size.height}.into()
+                    }), None)),
+                    WindowEvent::CloseRequested => self.queued_events.push_back(Event::Input(Input::Close(CloseArgs), None)),
+                    // TODO: This event needs to be added to pistoncore-input, see issue
+                    //  PistonDevelopers/piston#1117
+                    //WindowEvent::DroppedFile(path) => {
+                    //    Input::Custom(EventId("DroppedFile"), Arc::new(path))
+                    //},
+                    WindowEvent::ReceivedCharacter(c) => {
+                        match c {
+                            // Ignore control characters
+                            '\u{7f}' | // Delete
+                            '\u{1b}' | // Escape
+                            '\u{8}'  | // Backspace
+                            '\r' | '\n' | '\t' => return,
+                            _ => ()
+                        };
+
+                        self.queued_events.push_back(Event::Input(Input::Text(c.to_string()), None));
+                    },
+                    WindowEvent::Focused(focused) => self.queued_events.push_back(Event::Input(Input::Focus(focused), None)),
+                    WindowEvent::KeyboardInput { device_id: _, input } => {
+                        self.queued_events.push_back(map_keyboard_input(&input));
+                    },
+                    WindowEvent::CursorMoved { device_id: _, position, modifiers: _ } => {
+                        if self.capture_cursor {
+                            let prev_last_cursor = self.last_cursor;
+                            self.last_cursor = position;
+
+                            // Don't track distance if the position is at the center, this probably is
+                            //  from cursor center lock, or irrelevant.
+                            if position.x == center.width && position.y == center.height {
+                                return;
+                            }
+
+                            // Add the distance to the tracked cursor movement
+                            self.cursor_accumulator.x += position.x - prev_last_cursor.x as f64;
+                            self.cursor_accumulator.y += position.y - prev_last_cursor.y as f64;
+
+                            return;
+                        } else {
+                            self.queued_events.push_back(Event::Input(Input::Move(Motion::MouseCursor([position.x, position.y])), None));
+                        }
+                    },
+                    WindowEvent::CursorEntered { device_id: _ } =>
+                        self.queued_events.push_back(Event::Input(Input::Cursor(true), None)),
+                    WindowEvent::CursorLeft { device_id: _ } =>
+                        self.queued_events.push_back(Event::Input(Input::Cursor(false), None)),
+                    WindowEvent::MouseWheel { device_id: _, delta, phase: _, modifiers: _ } => {
+                        self.queued_events.push_back(match delta {
+                            MouseScrollDelta::PixelDelta(LogicalPosition{x, y}) =>
+                                Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None),
+                            MouseScrollDelta::LineDelta(x, y) =>
+                                Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None),
+                        });
+                    },
+                    WindowEvent::MouseInput { device_id: _, state, button, modifiers: _ } => {
+                        let button = map_mouse_button(button);
+                        let state = if state == ElementState::Pressed {
+                            ButtonState::Press
+                        } else {
+                            ButtonState::Release
+                        };
+
+                        self.queued_events.push_back(Event::Input(Input::Button(ButtonArgs {
+                            state: state,
+                            button: Button::Mouse(button),
+                            scancode: None,
+                        }), None));
+                    },
+                    _ => (),
+                }
+            },
+            _ => (),
+        }
+    }
 }
 
 impl Window for WinitWindow {
@@ -147,26 +230,28 @@ impl Window for WinitWindow {
             ).unwrap();
 
             // Create a relative input based on the distance from the center
-            self.queued_events.push_back(Input::Move(Motion::MouseRelative(
-                self.cursor_accumulator.x,
-                self.cursor_accumulator.y,
-            )));
+            self.queued_events.push_back(Event::Input(
+                Input::Move(Motion::MouseRelative([
+                    self.cursor_accumulator.x,
+                    self.cursor_accumulator.y,
+                ])
+            ), None));
 
             self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
         }
     }
 
-    fn wait_event(&mut self) -> Input {
+    fn wait_event(&mut self) -> Event {
         // TODO: Implement this
         unimplemented!()
     }
 
-    fn wait_event_timeout(&mut self, _timeout: Duration) -> Option<Input> {
+    fn wait_event_timeout(&mut self, _timeout: Duration) -> Option<Event> {
         // TODO: Implement this
         unimplemented!()
     }
 
-    fn poll_event(&mut self) -> Option<Input> {
+    fn poll_event(&mut self) -> Option<Event> {
         let mut center = self.get_window().get_inner_size().unwrap_or(LogicalSize::new(2., 2.));
         center.width /= 2.;
         center.height /= 2.;
@@ -174,23 +259,18 @@ impl Window for WinitWindow {
         // Add all events we got to the event queue, since winit only allows us to get all pending
         //  events at once.
         {
-            let queued_events = &mut self.queued_events;
-            let capture_cursor = self.capture_cursor;
-            let last_cursor = &mut self.last_cursor;
-            let cursor_accumulator = &mut self.cursor_accumulator;
-            self.events_loop.poll_events(|event| {
-                push_events_for(
-                    event, queued_events, capture_cursor, center,
-                    last_cursor, cursor_accumulator,
-                )
-            });
+            let mut events: Vec<winit::Event> = Vec::new();
+            self.events_loop.poll_events(|event| events.push(event));
+            for event in events.into_iter() {
+                self.handle_event(event, center)
+            }
         }
 
         // Get the first event in the queue
         let event = self.queued_events.pop_front();
 
         // Check if we got a close event, if we did we need to mark ourselves as should-close
-        if let &Some(Input::Close(_)) = &event {
+        if let &Some(Event::Input(Input::Close(_), ..)) = &event {
             self.set_should_close(true);
         }
 
@@ -279,91 +359,7 @@ impl AdvancedWindow for WinitWindow {
     }
 }
 
-fn push_events_for(
-    event: WinitEvent, queue: &mut VecDeque<Input>,
-    capture_cursor: bool, center: LogicalSize,
-    last_cursor: &mut LogicalPosition, cursor_accumulator: &mut LogicalPosition,
-) {
-    match event {
-        WinitEvent::WindowEvent { event: ev, .. } => {
-            match ev {
-                WindowEvent::Resized(size) => queue.push_back(Input::Resize(size.width, size.height)),
-                WindowEvent::CloseRequested => queue.push_back(Input::Close(CloseArgs)),
-                // TODO: This event needs to be added to pistoncore-input, see issue
-                //  PistonDevelopers/piston#1117
-                //WindowEvent::DroppedFile(path) => {
-                //    Input::Custom(EventId("DroppedFile"), Arc::new(path))
-                //},
-                WindowEvent::ReceivedCharacter(c) => {
-                    match c {
-                        // Ignore control characters
-                        '\u{7f}' | // Delete
-                        '\u{1b}' | // Escape
-                        '\u{8}'  | // Backspace
-                        '\r' | '\n' | '\t' => return,
-                        _ => ()
-                    };
-
-                    queue.push_back(Input::Text(c.to_string()));
-                },
-                WindowEvent::Focused(focused) => queue.push_back(Input::Focus(focused)),
-                WindowEvent::KeyboardInput { device_id: _, input } => {
-                    queue.push_back(map_keyboard_input(&input));
-                },
-                WindowEvent::CursorMoved { device_id: _, position, modifiers: _ } => {
-                    if capture_cursor {
-                        let prev_last_cursor = *last_cursor;
-                        *last_cursor = position;
-
-                        // Don't track distance if the position is at the center, this probably is
-                        //  from cursor center lock, or irrelevant.
-                        if position.x == center.width && position.y == center.height {
-                            return;
-                        }
-
-                        // Add the distance to the tracked cursor movement
-                        cursor_accumulator.x += position.x - prev_last_cursor.x as f64;
-                        cursor_accumulator.y += position.y - prev_last_cursor.y as f64;
-
-                        return;
-                    } else {
-                        queue.push_back(Input::Move(Motion::MouseCursor(position.x, position.y)));
-                    }
-                },
-                WindowEvent::CursorEntered { device_id: _ } =>
-                    queue.push_back(Input::Cursor(true)),
-                WindowEvent::CursorLeft { device_id: _ } =>
-                    queue.push_back(Input::Cursor(false)),
-                WindowEvent::MouseWheel { device_id: _, delta, phase: _, modifiers: _ } => {
-                    queue.push_back(match delta {
-                        MouseScrollDelta::PixelDelta(LogicalPosition{x, y}) =>
-                            Input::Move(Motion::MouseScroll(x as f64, y as f64)),
-                        MouseScrollDelta::LineDelta(x, y) =>
-                            Input::Move(Motion::MouseScroll(x as f64, y as f64)),
-                    });
-                },
-                WindowEvent::MouseInput { device_id: _, state, button, modifiers: _ } => {
-                    let button = map_mouse_button(button);
-                    let state = if state == ElementState::Pressed {
-                        ButtonState::Press
-                    } else {
-                        ButtonState::Release
-                    };
-
-                    queue.push_back(Input::Button(ButtonArgs {
-                        state: state,
-                        button: Button::Mouse(button),
-                        scancode: None,
-                    }));
-                },
-                _ => (),
-            }
-        },
-        _ => (),
-    }
-}
-
-fn map_keyboard_input(input: &KeyboardInput) -> Input {
+fn map_keyboard_input(input: &KeyboardInput) -> Event {
     use winit::VirtualKeyCode::*;
     // TODO: Complete the lookup match
     let key = if let Some(vk) = input.virtual_keycode {
@@ -455,11 +451,11 @@ fn map_keyboard_input(input: &KeyboardInput) -> Input {
         ButtonState::Release
     };
 
-    Input::Button(ButtonArgs {
+    Event::Input(Input::Button(ButtonArgs {
         state: state,
         button: Button::Keyboard(key),
         scancode: Some(input.scancode as i32),
-    })
+    }), None)
 }
 
 fn map_mouse_button(button: WinitMouseButton) -> MouseButton {
