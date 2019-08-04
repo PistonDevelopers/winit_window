@@ -18,7 +18,7 @@ name = "winit_window"
 path = "src/lib.rs"
 
 [dependencies]
-winit = "0.19.2"
+winit = "0.19"
 pistoncore-input = "0.28.0"
 pistoncore-window = "0.44.0"
 
