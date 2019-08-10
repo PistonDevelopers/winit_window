@@ -54,6 +54,7 @@ pub struct WinitWindow {
 
     title: String,
     capture_cursor: bool,
+    exit_on_esc: bool,
 }
 
 impl WinitWindow {
@@ -79,6 +80,7 @@ impl WinitWindow {
 
             title: settings.get_title(),
             capture_cursor: false,
+            exit_on_esc: settings.get_exit_on_esc(),
         }
     }
 
@@ -102,6 +104,7 @@ impl WinitWindow {
 
             title: settings.get_title(),
             capture_cursor: false,
+            exit_on_esc: settings.get_exit_on_esc(),
         }
     }
 
@@ -143,7 +146,13 @@ impl WinitWindow {
                     },
                     WindowEvent::Focused(focused) => self.queued_events.push_back(Event::Input(Input::Focus(focused), None)),
                     WindowEvent::KeyboardInput { device_id: _, input } => {
-                        self.queued_events.push_back(map_keyboard_input(&input));
+                        let key = map_key(&input);
+                        if self.exit_on_esc && key == Key::Escape {
+                            self.set_should_close(true);
+                        }
+                        else {
+                            self.queued_events.push_back(map_keyboard_input(&input));
+                        }
                     },
                     WindowEvent::CursorMoved { device_id: _, position, modifiers: _ } => {
                         if self.capture_cursor {
@@ -295,11 +304,11 @@ impl AdvancedWindow for WinitWindow {
     }
 
     fn get_exit_on_esc(&self) -> bool {
-        false
+        self.exit_on_esc
     }
 
-    fn set_exit_on_esc(&mut self, _value: bool) {
-        // TODO: Implement this
+    fn set_exit_on_esc(&mut self, value: bool) {
+        self.exit_on_esc = value
     }
 
     fn set_capture_cursor(&mut self, value: bool) {
@@ -359,10 +368,10 @@ impl AdvancedWindow for WinitWindow {
     }
 }
 
-fn map_keyboard_input(input: &KeyboardInput) -> Event {
+fn map_key(input: &KeyboardInput) -> Key {
     use winit::VirtualKeyCode::*;
     // TODO: Complete the lookup match
-    let key = if let Some(vk) = input.virtual_keycode {
+    if let Some(vk) = input.virtual_keycode {
         match vk {
             Key1 => Key::D1,
             Key2 => Key::D2,
@@ -443,7 +452,11 @@ fn map_keyboard_input(input: &KeyboardInput) -> Event {
         }
     } else {
         Key::Unknown
-    };
+    }
+}
+
+fn map_keyboard_input(input: &KeyboardInput) -> Event {
+    let key = map_key(input);
 
     let state = if input.state == ElementState::Pressed {
         ButtonState::Press
