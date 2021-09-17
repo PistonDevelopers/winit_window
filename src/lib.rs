@@ -34,7 +34,7 @@ pub use vulkano_win::required_extensions;
 
 pub struct WinitWindow {
     // TODO: These public fields should be changed to accessors
-    pub events_loop: EventLoop<UserEvent>,
+    pub event_loop: EventLoop<UserEvent>,
     
     #[cfg(feature="use-vulkano")]
     surface: Arc<Surface<OriginalWinitWindow>>,
@@ -64,16 +64,16 @@ impl WinitWindow {
     pub fn new_vulkano(instance: Arc<Instance>, settings: &WindowSettings) -> Self {
         use vulkano_win::VkSurfaceBuild;
         
-        let events_loop = EventLoop::with_user_event();
+        let event_loop = EventLoop::with_user_event();
         let surface = WindowBuilder::new()
             .with_inner_size(LogicalSize::<f64>::new(settings.get_size().width.into(), settings.get_size().height.into()))
             .with_title(settings.get_title())
-            .build_vk_surface(&events_loop, instance)
+            .build_vk_surface(&event_loop, instance)
             .unwrap();
 
         WinitWindow {
             surface,
-            events_loop,
+            event_loop,
 
             should_close: false,
             queued_events: VecDeque::new(),
@@ -88,16 +88,16 @@ impl WinitWindow {
 
     #[cfg(not(feature="use-vulkano"))]
     pub fn new(settings: &WindowSettings) -> Self {
-        let events_loop = EventLoop::with_user_event();
+        let event_loop = EventLoop::with_user_event();
         let window = WindowBuilder::new()
             .with_inner_size(LogicalSize::<f64>::new(settings.get_size().width.into(), settings.get_size().height.into()))
             .with_title(settings.get_title())
-            .build(&events_loop)
+            .build(&event_loop)
             .unwrap();
 
         WinitWindow {
             window,
-            events_loop,
+            event_loop,
 
             should_close: false,
             queued_events: VecDeque::new(),
@@ -274,10 +274,10 @@ impl Window for WinitWindow {
         //  events at once.
         {
             let mut events: Vec<winit::event::Event<UserEvent>> = Vec::new();
-            let event_loop_proxy = self.events_loop.create_proxy();
+            let event_loop_proxy = self.event_loop.create_proxy();
             event_loop_proxy.send_event(UserEvent::WakeUp).expect("Event loop is closed before property handling all events.");
 
-            self.events_loop.run_return(|event, _, control_flow| {
+            self.event_loop.run_return(|event, _, control_flow| {
                 if let Some(e) = event.to_static() {
                     if e == winit::event::Event::UserEvent(UserEvent::WakeUp) {
                         *control_flow = ControlFlow::Exit;
