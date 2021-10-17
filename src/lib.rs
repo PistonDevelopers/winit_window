@@ -6,6 +6,7 @@ extern crate vulkano_win;
 extern crate input;
 extern crate window;
 
+use winit::platform::run_return::EventLoopExtRunReturn;
 use std::time::Duration;
 use std::collections::VecDeque;
 
@@ -20,16 +21,10 @@ use vulkano::{
 };
 
 use winit::{
-    EventsLoop,
-    Window as OriginalWinitWindow,
-    WindowBuilder,
-    Event as WinitEvent,
-    WindowEvent,
-    ElementState,
-    MouseButton as WinitMouseButton,
-    KeyboardInput,
-    MouseScrollDelta,
-    dpi::{LogicalPosition, LogicalSize}
+    event::{ElementState, KeyboardInput, MouseButton as WinitMouseButton, Event as WinitEvent, WindowEvent, MouseScrollDelta},
+    event_loop::{ControlFlow, EventLoop},
+    window::{Window as OriginalWinitWindow, WindowBuilder},
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition}
 };
 use input::{Input, CloseArgs, Motion, Button, MouseButton, Key, ButtonState, ButtonArgs, Event, ResizeArgs};
 use window::{Window, Size, WindowSettings, Position, AdvancedWindow};
@@ -39,7 +34,7 @@ pub use vulkano_win::required_extensions;
 
 pub struct WinitWindow {
     // TODO: These public fields should be changed to accessors
-    pub events_loop: EventsLoop,
+    pub event_loop: EventLoop<UserEvent>,
     
     #[cfg(feature="use-vulkano")]
     surface: Arc<Surface<OriginalWinitWindow>>,
@@ -49,12 +44,19 @@ pub struct WinitWindow {
 
     should_close: bool,
     queued_events: VecDeque<Event>,
-    last_cursor: LogicalPosition,
-    cursor_accumulator: LogicalPosition,
+    last_cursor: LogicalPosition<f64>,
+    cursor_accumulator: LogicalPosition<f64>,
 
     title: String,
     capture_cursor: bool,
     exit_on_esc: bool,
+}
+
+/// Custom events for the winit event loop
+#[derive(Debug, PartialEq, Eq)]
+pub enum UserEvent {
+    /// Do nothing, just spin the event loop
+    WakeUp
 }
 
 impl WinitWindow {
@@ -62,16 +64,16 @@ impl WinitWindow {
     pub fn new_vulkano(instance: Arc<Instance>, settings: &WindowSettings) -> Self {
         use vulkano_win::VkSurfaceBuild;
         
-        let events_loop = EventsLoop::new();
+        let event_loop = EventLoop::with_user_event();
         let surface = WindowBuilder::new()
-            .with_dimensions(LogicalSize::new(settings.get_size().width.into(), settings.get_size().height.into()))
+            .with_inner_size(LogicalSize::<f64>::new(settings.get_size().width.into(), settings.get_size().height.into()))
             .with_title(settings.get_title())
-            .build_vk_surface(&events_loop, instance)
+            .build_vk_surface(&event_loop, instance)
             .unwrap();
 
         WinitWindow {
             surface,
-            events_loop,
+            event_loop,
 
             should_close: false,
             queued_events: VecDeque::new(),
@@ -86,16 +88,16 @@ impl WinitWindow {
 
     #[cfg(not(feature="use-vulkano"))]
     pub fn new(settings: &WindowSettings) -> Self {
-        let events_loop = EventsLoop::new();
+        let event_loop = EventLoop::with_user_event();
         let window = WindowBuilder::new()
-            .with_dimensions(LogicalSize::new(settings.get_size().width.into(), settings.get_size().height.into()))
+            .with_inner_size(LogicalSize::<f64>::new(settings.get_size().width.into(), settings.get_size().height.into()))
             .with_title(settings.get_title())
-            .build(&events_loop)
+            .build(&event_loop)
             .unwrap();
 
         WinitWindow {
             window,
-            events_loop,
+            event_loop,
 
             should_close: false,
             queued_events: VecDeque::new(),
@@ -118,13 +120,13 @@ impl WinitWindow {
         &self.window
     }
 
-    fn handle_event(&mut self, event: winit::Event, center: LogicalSize) {
+    fn handle_event<T>(&mut self, event: winit::event::Event<T>, center: PhysicalPosition<f64>) {
         match event {
             WinitEvent::WindowEvent { event: ev, .. } => {
                 match ev {
                     WindowEvent::Resized(size) => self.queued_events.push_back(Event::Input(Input::Resize(ResizeArgs {
-                        window_size: [size.width, size.height],
-                        draw_size: Size {width: size.width, height: size.height}.into()
+                        window_size: [size.width as f64, size.height as f64],
+                        draw_size: Size {width: size.width as f64, height: size.height as f64}.into()
                     }), None)),
                     WindowEvent::CloseRequested => self.queued_events.push_back(Event::Input(Input::Close(CloseArgs), None)),
                     // TODO: This event needs to be added to pistoncore-input, see issue
@@ -145,7 +147,7 @@ impl WinitWindow {
                         self.queued_events.push_back(Event::Input(Input::Text(c.to_string()), None));
                     },
                     WindowEvent::Focused(focused) => self.queued_events.push_back(Event::Input(Input::Focus(focused), None)),
-                    WindowEvent::KeyboardInput { device_id: _, input } => {
+                    WindowEvent::KeyboardInput { device_id: _, input, is_synthetic: _ } => {
                         let key = map_key(&input);
                         if self.exit_on_esc && key == Key::Escape {
                             self.set_should_close(true);
@@ -154,14 +156,15 @@ impl WinitWindow {
                             self.queued_events.push_back(map_keyboard_input(&input));
                         }
                     },
+                    #[allow(deprecated)]
                     WindowEvent::CursorMoved { device_id: _, position, modifiers: _ } => {
                         if self.capture_cursor {
                             let prev_last_cursor = self.last_cursor;
-                            self.last_cursor = position;
+                            self.last_cursor = position.to_logical(self.get_window().scale_factor());
 
                             // Don't track distance if the position is at the center, this probably is
                             //  from cursor center lock, or irrelevant.
-                            if position.x == center.width && position.y == center.height {
+                            if position == center {
                                 return;
                             }
 
@@ -178,14 +181,16 @@ impl WinitWindow {
                         self.queued_events.push_back(Event::Input(Input::Cursor(true), None)),
                     WindowEvent::CursorLeft { device_id: _ } =>
                         self.queued_events.push_back(Event::Input(Input::Cursor(false), None)),
+                    #[allow(deprecated)]
                     WindowEvent::MouseWheel { device_id: _, delta, phase: _, modifiers: _ } => {
                         self.queued_events.push_back(match delta {
-                            MouseScrollDelta::PixelDelta(LogicalPosition{x, y}) =>
+                            MouseScrollDelta::PixelDelta(PhysicalPosition{x, y}) =>
                                 Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None),
                             MouseScrollDelta::LineDelta(x, y) =>
                                 Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None),
                         });
                     },
+                    #[allow(deprecated)]
                     WindowEvent::MouseInput { device_id: _, state, button, modifiers: _ } => {
                         let button = map_mouse_button(button);
                         let state = if state == ElementState::Pressed {
@@ -218,8 +223,8 @@ impl Window for WinitWindow {
     }
 
     fn size(&self) -> Size {
-        let (w, h) = self.get_window().get_inner_size().map(|x| x.into()).unwrap_or((1, 1));
-        let hidpi = self.get_window().get_hidpi_factor();
+        let (w, h): (u32, u32) = self.get_window().inner_size().into();
+        let hidpi = self.get_window().scale_factor();
         ((w as f64 / hidpi) as u32, (h as f64 / hidpi) as u32).into()
     }
 
@@ -229,14 +234,13 @@ impl Window for WinitWindow {
         //  detecting the end of a frame, which we can use to gather up cursor_accumulator data.
 
         if self.capture_cursor {
-            let mut center = self.get_window().get_inner_size().unwrap_or(LogicalSize::new(2., 2.));
-            center.width /= 2.;
-            center.height /= 2.;
+            let center: (f64, f64) = self.get_window().inner_size().into();
+            let mut center: PhysicalPosition<f64> = center.into();
+            center.x /= 2.;
+            center.y /= 2.;
 
             // Center-lock the cursor if we're using capture_cursor
-            self.get_window().set_cursor_position(
-                Into::<(f64, f64)>::into(center).into()
-            ).unwrap();
+            self.get_window().set_cursor_position(center).unwrap();
 
             // Create a relative input based on the distance from the center
             self.queued_events.push_back(Event::Input(
@@ -261,15 +265,27 @@ impl Window for WinitWindow {
     }
 
     fn poll_event(&mut self) -> Option<Event> {
-        let mut center = self.get_window().get_inner_size().unwrap_or(LogicalSize::new(2., 2.));
-        center.width /= 2.;
-        center.height /= 2.;
+        let center: (f64, f64) = self.get_window().inner_size().into();
+        let mut center: PhysicalPosition<f64> = center.into();
+        center.x /= 2.;
+        center.y /= 2.;
 
         // Add all events we got to the event queue, since winit only allows us to get all pending
         //  events at once.
         {
-            let mut events: Vec<winit::Event> = Vec::new();
-            self.events_loop.poll_events(|event| events.push(event));
+            let mut events: Vec<winit::event::Event<UserEvent>> = Vec::new();
+            let event_loop_proxy = self.event_loop.create_proxy();
+            event_loop_proxy.send_event(UserEvent::WakeUp).expect("Event loop is closed before property handling all events.");
+
+            self.event_loop.run_return(|event, _, control_flow| {
+                if let Some(e) = event.to_static() {
+                    if e == winit::event::Event::UserEvent(UserEvent::WakeUp) {
+                        *control_flow = ControlFlow::Exit;
+                        return;
+                    }
+                    events.push(e);
+                }
+            });
             for event in events.into_iter() {
                 self.handle_event(event, center)
             }
@@ -287,9 +303,8 @@ impl Window for WinitWindow {
     }
 
     fn draw_size(&self) -> Size {
-        self.get_window().get_inner_size()
-            .map(|size| (size.width as u32, size.height as u32))
-            .unwrap_or((1, 1)).into()
+        let size: (f64, f64) = self.get_window().inner_size().into();
+        size.into()
     }
 }
 
@@ -319,16 +334,16 @@ impl AdvancedWindow for WinitWindow {
 
         let window = self.get_window();
         if value {
-            window.grab_cursor(true).unwrap();
-            window.hide_cursor(true);
+            window.set_cursor_grab(true).unwrap();
+            window.set_cursor_visible(false);
             self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
-            let mut center = self.get_window().get_inner_size().unwrap_or(LogicalSize::new(2., 2.));
+            let mut center = self.get_window().inner_size().cast::<f64>();
             center.width /= 2.;
             center.height /= 2.;
             self.last_cursor = LogicalPosition::new(center.width, center.height);
         } else {
-            window.grab_cursor(false).unwrap();
-            window.hide_cursor(false);
+            window.set_cursor_grab(false).unwrap();
+            window.set_cursor_visible(true);
         }
         self.capture_cursor = value;
     }
@@ -342,25 +357,25 @@ impl AdvancedWindow for WinitWindow {
     }
 
     fn show(&mut self) {
-        self.get_window().show();
+        self.get_window().set_visible(true);
     }
 
     fn hide(&mut self) {
-        self.get_window().hide();
+        self.get_window().set_visible(false);
     }
 
     fn get_position(&self) -> Option<Position> {
-        self.get_window().get_position().map(|p| Position { x: p.x as i32, y: p.y as i32 })
+        self.get_window().outer_position().map(|p| Position {x: p.x, y: p.y}).ok()
     }
 
     fn set_position<P: Into<Position>>(&mut self, val: P) {
         let val = val.into();
-        self.get_window().set_position(LogicalPosition::new(val.x as f64, val.y as f64))
+        self.get_window().set_outer_position(LogicalPosition::new(val.x as f64, val.y as f64))
     }
 
     fn set_size<S: Into<Size>>(&mut self, size: S) {
         let size: Size = size.into();
-        let hidpi = self.get_window().get_hidpi_factor();
+        let hidpi = self.get_window().scale_factor();
         self.get_window().set_inner_size(LogicalSize::new(
             size.width as f64 * hidpi,
             size.height as f64 * hidpi
@@ -369,7 +384,7 @@ impl AdvancedWindow for WinitWindow {
 }
 
 fn map_key(input: &KeyboardInput) -> Key {
-    use winit::VirtualKeyCode::*;
+    use winit::event::VirtualKeyCode::*;
     // TODO: Complete the lookup match
     if let Some(vk) = input.virtual_keycode {
         match vk {

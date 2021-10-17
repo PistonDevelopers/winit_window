@@ -18,14 +18,14 @@ name = "winit_window"
 path = "src/lib.rs"
 
 [dependencies]
-winit = "0.19"
-pistoncore-input = "0.28.0"
-pistoncore-window = "0.44.0"
+winit = "0.25"
+pistoncore-input = "1.0.0"
+pistoncore-window = "0.47.0"
 
 [dependencies.vulkano]
-version = "0.11"
+version = "0.25"
 optional = true
 
 [dependencies.vulkano-win]
-version = "0.11"
+version = "0.25"
 optional = true
