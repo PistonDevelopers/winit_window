@@ -17,8 +17,8 @@ pub use vulkano_window::{required_extensions, VulkanoWindow};
 use input::{
     Button, ButtonArgs, ButtonState, CloseArgs, Event, Input, Key, Motion, MouseButton, ResizeArgs,
 };
-use std::{collections::VecDeque, time::Duration};
-use window::{AdvancedWindow, Position, Size, Window, WindowSettings};
+use std::{collections::VecDeque, error::Error, time::Duration};
+use window::{AdvancedWindow, BuildFromWindowSettings, Position, Size, Window, WindowSettings};
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
     event::{
@@ -304,6 +304,13 @@ impl AdvancedWindow for WinitWindow {
             size.width as f64 * hidpi,
             size.height as f64 * hidpi,
         ));
+    }
+}
+
+#[cfg(not(feature = "use-vulkano"))]
+impl BuildFromWindowSettings for WinitWindow {
+    fn build_from_window_settings(settings: &WindowSettings) -> Result<Self, Box<dyn Error>> {
+        Ok(Self::new(settings))
     }
 }
 
