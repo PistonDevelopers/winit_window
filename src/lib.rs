@@ -1,45 +1,46 @@
-extern crate winit;
-#[cfg(feature="use-vulkano")]
-extern crate vulkano;
-#[cfg(feature="use-vulkano")]
-extern crate vulkano_win;
 extern crate input;
+#[cfg(feature = "use-vulkano")]
+extern crate vulkano;
+#[cfg(feature = "use-vulkano")]
+extern crate vulkano_win;
 extern crate window;
+extern crate winit;
 
-use winit::platform::run_return::EventLoopExtRunReturn;
-use std::time::Duration;
 use std::collections::VecDeque;
+use std::time::Duration;
+use winit::platform::run_return::EventLoopExtRunReturn;
 
-
-#[cfg(feature="use-vulkano")]
+#[cfg(feature = "use-vulkano")]
 use std::sync::Arc;
 
-#[cfg(feature="use-vulkano")]
-use vulkano::{
-    swapchain::Surface,
-    instance::Instance
-};
+#[cfg(feature = "use-vulkano")]
+use vulkano::{instance::Instance, swapchain::Surface};
 
+use input::{
+    Button, ButtonArgs, ButtonState, CloseArgs, Event, Input, Key, Motion, MouseButton, ResizeArgs,
+};
+use window::{AdvancedWindow, Position, Size, Window, WindowSettings};
 use winit::{
-    event::{ElementState, KeyboardInput, MouseButton as WinitMouseButton, Event as WinitEvent, WindowEvent, MouseScrollDelta},
+    dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
+    event::{
+        ElementState, Event as WinitEvent, KeyboardInput, MouseButton as WinitMouseButton,
+        MouseScrollDelta, WindowEvent,
+    },
     event_loop::{ControlFlow, EventLoop},
     window::{Window as OriginalWinitWindow, WindowBuilder},
-    dpi::{LogicalPosition, LogicalSize, PhysicalPosition}
 };
-use input::{Input, CloseArgs, Motion, Button, MouseButton, Key, ButtonState, ButtonArgs, Event, ResizeArgs};
-use window::{Window, Size, WindowSettings, Position, AdvancedWindow};
 
-#[cfg(feature="use-vulkano")]
+#[cfg(feature = "use-vulkano")]
 pub use vulkano_win::required_extensions;
 
 pub struct WinitWindow {
     // TODO: These public fields should be changed to accessors
     pub event_loop: EventLoop<UserEvent>,
-    
-    #[cfg(feature="use-vulkano")]
+
+    #[cfg(feature = "use-vulkano")]
     surface: Arc<Surface<OriginalWinitWindow>>,
-    
-    #[cfg(not(feature="use-vulkano"))]
+
+    #[cfg(not(feature = "use-vulkano"))]
     window: OriginalWinitWindow,
 
     should_close: bool,
@@ -56,17 +57,20 @@ pub struct WinitWindow {
 #[derive(Debug, PartialEq, Eq)]
 pub enum UserEvent {
     /// Do nothing, just spin the event loop
-    WakeUp
+    WakeUp,
 }
 
 impl WinitWindow {
-    #[cfg(feature="use-vulkano")]
+    #[cfg(feature = "use-vulkano")]
     pub fn new_vulkano(instance: Arc<Instance>, settings: &WindowSettings) -> Self {
         use vulkano_win::VkSurfaceBuild;
-        
+
         let event_loop = EventLoop::with_user_event();
         let surface = WindowBuilder::new()
-            .with_inner_size(LogicalSize::<f64>::new(settings.get_size().width.into(), settings.get_size().height.into()))
+            .with_inner_size(LogicalSize::<f64>::new(
+                settings.get_size().width.into(),
+                settings.get_size().height.into(),
+            ))
             .with_title(settings.get_title())
             .build_vk_surface(&event_loop, instance)
             .unwrap();
@@ -86,11 +90,14 @@ impl WinitWindow {
         }
     }
 
-    #[cfg(not(feature="use-vulkano"))]
+    #[cfg(not(feature = "use-vulkano"))]
     pub fn new(settings: &WindowSettings) -> Self {
         let event_loop = EventLoop::with_user_event();
         let window = WindowBuilder::new()
-            .with_inner_size(LogicalSize::<f64>::new(settings.get_size().width.into(), settings.get_size().height.into()))
+            .with_inner_size(LogicalSize::<f64>::new(
+                settings.get_size().width.into(),
+                settings.get_size().height.into(),
+            ))
             .with_title(settings.get_title())
             .build(&event_loop)
             .unwrap();
@@ -110,12 +117,12 @@ impl WinitWindow {
         }
     }
 
-    #[cfg(feature="use-vulkano")]
+    #[cfg(feature = "use-vulkano")]
     pub fn get_window(&self) -> &OriginalWinitWindow {
         self.surface.window()
     }
 
-    #[cfg(not(feature="use-vulkano"))]
+    #[cfg(not(feature = "use-vulkano"))]
     pub fn get_window(&self) -> &OriginalWinitWindow {
         &self.window
     }
@@ -124,11 +131,20 @@ impl WinitWindow {
         match event {
             WinitEvent::WindowEvent { event: ev, .. } => {
                 match ev {
-                    WindowEvent::Resized(size) => self.queued_events.push_back(Event::Input(Input::Resize(ResizeArgs {
-                        window_size: [size.width as f64, size.height as f64],
-                        draw_size: Size {width: size.width as f64, height: size.height as f64}.into()
-                    }), None)),
-                    WindowEvent::CloseRequested => self.queued_events.push_back(Event::Input(Input::Close(CloseArgs), None)),
+                    WindowEvent::Resized(size) => self.queued_events.push_back(Event::Input(
+                        Input::Resize(ResizeArgs {
+                            window_size: [size.width as f64, size.height as f64],
+                            draw_size: Size {
+                                width: size.width as f64,
+                                height: size.height as f64,
+                            }
+                            .into(),
+                        }),
+                        None,
+                    )),
+                    WindowEvent::CloseRequested => self
+                        .queued_events
+                        .push_back(Event::Input(Input::Close(CloseArgs), None)),
                     // TODO: This event needs to be added to pistoncore-input, see issue
                     //  PistonDevelopers/piston#1117
                     //WindowEvent::DroppedFile(path) => {
@@ -144,23 +160,34 @@ impl WinitWindow {
                             _ => ()
                         };
 
-                        self.queued_events.push_back(Event::Input(Input::Text(c.to_string()), None));
-                    },
-                    WindowEvent::Focused(focused) => self.queued_events.push_back(Event::Input(Input::Focus(focused), None)),
-                    WindowEvent::KeyboardInput { device_id: _, input, is_synthetic: _ } => {
+                        self.queued_events
+                            .push_back(Event::Input(Input::Text(c.to_string()), None));
+                    }
+                    WindowEvent::Focused(focused) => self
+                        .queued_events
+                        .push_back(Event::Input(Input::Focus(focused), None)),
+                    WindowEvent::KeyboardInput {
+                        device_id: _,
+                        input,
+                        is_synthetic: _,
+                    } => {
                         let key = map_key(&input);
                         if self.exit_on_esc && key == Key::Escape {
                             self.set_should_close(true);
-                        }
-                        else {
+                        } else {
                             self.queued_events.push_back(map_keyboard_input(&input));
                         }
-                    },
+                    }
                     #[allow(deprecated)]
-                    WindowEvent::CursorMoved { device_id: _, position, modifiers: _ } => {
+                    WindowEvent::CursorMoved {
+                        device_id: _,
+                        position,
+                        modifiers: _,
+                    } => {
                         if self.capture_cursor {
                             let prev_last_cursor = self.last_cursor;
-                            self.last_cursor = position.to_logical(self.get_window().scale_factor());
+                            self.last_cursor =
+                                position.to_logical(self.get_window().scale_factor());
 
                             // Don't track distance if the position is at the center, this probably is
                             //  from cursor center lock, or irrelevant.
@@ -174,24 +201,45 @@ impl WinitWindow {
 
                             return;
                         } else {
-                            self.queued_events.push_back(Event::Input(Input::Move(Motion::MouseCursor([position.x, position.y])), None));
+                            self.queued_events.push_back(Event::Input(
+                                Input::Move(Motion::MouseCursor([position.x, position.y])),
+                                None,
+                            ));
                         }
-                    },
-                    WindowEvent::CursorEntered { device_id: _ } =>
-                        self.queued_events.push_back(Event::Input(Input::Cursor(true), None)),
-                    WindowEvent::CursorLeft { device_id: _ } =>
-                        self.queued_events.push_back(Event::Input(Input::Cursor(false), None)),
+                    }
+                    WindowEvent::CursorEntered { device_id: _ } => self
+                        .queued_events
+                        .push_back(Event::Input(Input::Cursor(true), None)),
+                    WindowEvent::CursorLeft { device_id: _ } => self
+                        .queued_events
+                        .push_back(Event::Input(Input::Cursor(false), None)),
                     #[allow(deprecated)]
-                    WindowEvent::MouseWheel { device_id: _, delta, phase: _, modifiers: _ } => {
+                    WindowEvent::MouseWheel {
+                        device_id: _,
+                        delta,
+                        phase: _,
+                        modifiers: _,
+                    } => {
                         self.queued_events.push_back(match delta {
-                            MouseScrollDelta::PixelDelta(PhysicalPosition{x, y}) =>
-                                Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None),
-                            MouseScrollDelta::LineDelta(x, y) =>
-                                Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None),
+                            MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
+                                Event::Input(
+                                    Input::Move(Motion::MouseScroll([x as f64, y as f64])),
+                                    None,
+                                )
+                            }
+                            MouseScrollDelta::LineDelta(x, y) => Event::Input(
+                                Input::Move(Motion::MouseScroll([x as f64, y as f64])),
+                                None,
+                            ),
                         });
-                    },
+                    }
                     #[allow(deprecated)]
-                    WindowEvent::MouseInput { device_id: _, state, button, modifiers: _ } => {
+                    WindowEvent::MouseInput {
+                        device_id: _,
+                        state,
+                        button,
+                        modifiers: _,
+                    } => {
                         let button = map_mouse_button(button);
                         let state = if state == ElementState::Pressed {
                             ButtonState::Press
@@ -199,15 +247,18 @@ impl WinitWindow {
                             ButtonState::Release
                         };
 
-                        self.queued_events.push_back(Event::Input(Input::Button(ButtonArgs {
-                            state: state,
-                            button: Button::Mouse(button),
-                            scancode: None,
-                        }), None));
-                    },
+                        self.queued_events.push_back(Event::Input(
+                            Input::Button(ButtonArgs {
+                                state: state,
+                                button: Button::Mouse(button),
+                                scancode: None,
+                            }),
+                            None,
+                        ));
+                    }
                     _ => (),
                 }
-            },
+            }
             _ => (),
         }
     }
@@ -247,8 +298,9 @@ impl Window for WinitWindow {
                 Input::Move(Motion::MouseRelative([
                     self.cursor_accumulator.x,
                     self.cursor_accumulator.y,
-                ])
-            ), None));
+                ])),
+                None,
+            ));
 
             self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
         }
@@ -275,7 +327,9 @@ impl Window for WinitWindow {
         {
             let mut events: Vec<winit::event::Event<UserEvent>> = Vec::new();
             let event_loop_proxy = self.event_loop.create_proxy();
-            event_loop_proxy.send_event(UserEvent::WakeUp).expect("Event loop is closed before property handling all events.");
+            event_loop_proxy
+                .send_event(UserEvent::WakeUp)
+                .expect("Event loop is closed before property handling all events.");
 
             self.event_loop.run_return(|event, _, control_flow| {
                 if let Some(e) = event.to_static() {
@@ -365,12 +419,16 @@ impl AdvancedWindow for WinitWindow {
     }
 
     fn get_position(&self) -> Option<Position> {
-        self.get_window().outer_position().map(|p| Position {x: p.x, y: p.y}).ok()
+        self.get_window()
+            .outer_position()
+            .map(|p| Position { x: p.x, y: p.y })
+            .ok()
     }
 
     fn set_position<P: Into<Position>>(&mut self, val: P) {
         let val = val.into();
-        self.get_window().set_outer_position(LogicalPosition::new(val.x as f64, val.y as f64))
+        self.get_window()
+            .set_outer_position(LogicalPosition::new(val.x as f64, val.y as f64))
     }
 
     fn set_size<S: Into<Size>>(&mut self, size: S) {
@@ -378,7 +436,7 @@ impl AdvancedWindow for WinitWindow {
         let hidpi = self.get_window().scale_factor();
         self.get_window().set_inner_size(LogicalSize::new(
             size.width as f64 * hidpi,
-            size.height as f64 * hidpi
+            size.height as f64 * hidpi,
         ));
     }
 }
@@ -479,11 +537,14 @@ fn map_keyboard_input(input: &KeyboardInput) -> Event {
         ButtonState::Release
     };
 
-    Event::Input(Input::Button(ButtonArgs {
-        state: state,
-        button: Button::Keyboard(key),
-        scancode: Some(input.scancode as i32),
-    }), None)
+    Event::Input(
+        Input::Button(ButtonArgs {
+            state: state,
+            button: Button::Keyboard(key),
+            scancode: Some(input.scancode as i32),
+        }),
+        None,
+    )
 }
 
 fn map_mouse_button(button: WinitMouseButton) -> MouseButton {
