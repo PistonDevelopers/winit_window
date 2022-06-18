@@ -5,7 +5,7 @@ extern crate winit_window;
 use vulkano::instance::{Instance, Version};
 use window::WindowSettings;
 
-use winit_window::WinitWindow;
+use winit_window::VulkanoWindow;
 
 fn main() {
     let instance = Instance::new(
@@ -15,5 +15,5 @@ fn main() {
         None,
     )
     .unwrap();
-    let _ = WinitWindow::new_vulkano(instance, &WindowSettings::new("Winit Window", (640, 480)));
+    let _ = VulkanoWindow::new(instance, &WindowSettings::new("Winit Window", (640, 480)));
 }

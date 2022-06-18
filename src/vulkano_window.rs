@@ -1,40 +1,23 @@
-//! A [winit](https://crates.io/crates/winit) window back-end for the Piston game engine.
-
-extern crate input;
+use crate::{map_key, map_keyboard_input, map_mouse_button, UserEvent};
+use input::{Button, ButtonArgs, ButtonState, CloseArgs, Event, Input, Key, Motion, ResizeArgs};
+use std::{collections::VecDeque, sync::Arc, time::Duration};
 #[cfg(feature = "use-vulkano")]
-extern crate vulkano;
-#[cfg(feature = "use-vulkano")]
-extern crate vulkano_win;
-extern crate window;
-extern crate winit;
-
-#[cfg(feature = "use-vulkano")]
-mod vulkano_window;
-
-#[cfg(feature = "use-vulkano")]
-pub use vulkano_window::{required_extensions, VulkanoWindow};
-
-use input::{
-    Button, ButtonArgs, ButtonState, CloseArgs, Event, Input, Key, Motion, MouseButton, ResizeArgs,
-};
-use std::{collections::VecDeque, time::Duration};
+use vulkano::{instance::Instance, swapchain::Surface};
 use window::{AdvancedWindow, Position, Size, Window, WindowSettings};
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
-    event::{
-        ElementState, Event as WinitEvent, KeyboardInput, MouseButton as WinitMouseButton,
-        MouseScrollDelta, WindowEvent,
-    },
+    event::{ElementState, MouseScrollDelta, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
     platform::run_return::EventLoopExtRunReturn,
     window::WindowBuilder,
 };
 
-pub struct WinitWindow {
+pub use vulkano_win::required_extensions;
+
+pub struct VulkanoWindow {
     // TODO: These public fields should be changed to accessors
     pub event_loop: EventLoop<UserEvent>,
-
-    window: winit::window::Window,
+    surface: Arc<Surface<winit::window::Window>>,
 
     should_close: bool,
     queued_events: VecDeque<Event>,
@@ -46,27 +29,22 @@ pub struct WinitWindow {
     exit_on_esc: bool,
 }
 
-/// Custom events for the winit event loop
-#[derive(Debug, PartialEq, Eq)]
-pub enum UserEvent {
-    /// Do nothing, just spin the event loop
-    WakeUp,
-}
+impl VulkanoWindow {
+    pub fn new(instance: Arc<Instance>, settings: &WindowSettings) -> Self {
+        use vulkano_win::VkSurfaceBuild;
 
-impl WinitWindow {
-    pub fn new(settings: &WindowSettings) -> Self {
         let event_loop = EventLoop::with_user_event();
-        let window = WindowBuilder::new()
+        let surface = WindowBuilder::new()
             .with_inner_size(LogicalSize::<f64>::new(
                 settings.get_size().width.into(),
                 settings.get_size().height.into(),
             ))
             .with_title(settings.get_title())
-            .build(&event_loop)
+            .build_vk_surface(&event_loop, instance)
             .unwrap();
 
-        WinitWindow {
-            window,
+        VulkanoWindow {
+            surface,
             event_loop,
 
             should_close: false,
@@ -81,12 +59,11 @@ impl WinitWindow {
     }
 
     pub fn get_window(&self) -> &winit::window::Window {
-        &self.window
+        self.surface.window()
     }
-
     fn handle_event<T>(&mut self, event: winit::event::Event<T>, center: PhysicalPosition<f64>) {
         match event {
-            WinitEvent::WindowEvent { event: ev, .. } => {
+            winit::event::Event::WindowEvent { event: ev, .. } => {
                 match ev {
                     WindowEvent::Resized(size) => self.queued_events.push_back(Event::Input(
                         Input::Resize(ResizeArgs {
@@ -221,7 +198,7 @@ impl WinitWindow {
     }
 }
 
-impl Window for WinitWindow {
+impl Window for VulkanoWindow {
     fn set_should_close(&mut self, value: bool) {
         self.should_close = value;
     }
@@ -319,7 +296,7 @@ impl Window for WinitWindow {
     }
 }
 
-impl AdvancedWindow for WinitWindow {
+impl AdvancedWindow for VulkanoWindow {
     fn get_title(&self) -> String {
         self.title.clone()
     }
@@ -395,125 +372,5 @@ impl AdvancedWindow for WinitWindow {
             size.width as f64 * hidpi,
             size.height as f64 * hidpi,
         ));
-    }
-}
-
-fn map_key(input: &KeyboardInput) -> Key {
-    use winit::event::VirtualKeyCode::*;
-    // TODO: Complete the lookup match
-    if let Some(vk) = input.virtual_keycode {
-        match vk {
-            Key1 => Key::D1,
-            Key2 => Key::D2,
-            Key3 => Key::D3,
-            Key4 => Key::D4,
-            Key5 => Key::D5,
-            Key6 => Key::D6,
-            Key7 => Key::D7,
-            Key8 => Key::D8,
-            Key9 => Key::D9,
-            Key0 => Key::D0,
-            A => Key::A,
-            B => Key::B,
-            C => Key::C,
-            D => Key::D,
-            E => Key::E,
-            F => Key::F,
-            G => Key::G,
-            H => Key::H,
-            I => Key::I,
-            J => Key::J,
-            K => Key::K,
-            L => Key::L,
-            M => Key::M,
-            N => Key::N,
-            O => Key::O,
-            P => Key::P,
-            Q => Key::Q,
-            R => Key::R,
-            S => Key::S,
-            T => Key::T,
-            U => Key::U,
-            V => Key::V,
-            W => Key::W,
-            X => Key::X,
-            Y => Key::Y,
-            Z => Key::Z,
-            Escape => Key::Escape,
-            F1 => Key::F1,
-            F2 => Key::F2,
-            F3 => Key::F3,
-            F4 => Key::F4,
-            F5 => Key::F5,
-            F6 => Key::F6,
-            F7 => Key::F7,
-            F8 => Key::F8,
-            F9 => Key::F9,
-            F10 => Key::F10,
-            F11 => Key::F11,
-            F12 => Key::F12,
-            F13 => Key::F13,
-            F14 => Key::F14,
-            F15 => Key::F15,
-
-            Delete => Key::Delete,
-
-            Left => Key::Left,
-            Up => Key::Up,
-            Right => Key::Right,
-            Down => Key::Down,
-
-            Back => Key::Backspace,
-            Return => Key::Return,
-            Space => Key::Space,
-
-            LAlt => Key::LAlt,
-            LControl => Key::LCtrl,
-            LWin => Key::Menu,
-            LShift => Key::LShift,
-
-            RAlt => Key::LAlt,
-            RControl => Key::RCtrl,
-            RWin => Key::Menu,
-            RShift => Key::RShift,
-
-            Tab => Key::Tab,
-            _ => Key::Unknown,
-        }
-    } else {
-        Key::Unknown
-    }
-}
-
-fn map_keyboard_input(input: &KeyboardInput) -> Event {
-    let key = map_key(input);
-
-    let state = if input.state == ElementState::Pressed {
-        ButtonState::Press
-    } else {
-        ButtonState::Release
-    };
-
-    Event::Input(
-        Input::Button(ButtonArgs {
-            state: state,
-            button: Button::Keyboard(key),
-            scancode: Some(input.scancode as i32),
-        }),
-        None,
-    )
-}
-
-fn map_mouse_button(button: WinitMouseButton) -> MouseButton {
-    match button {
-        WinitMouseButton::Left => MouseButton::Left,
-        WinitMouseButton::Right => MouseButton::Right,
-        WinitMouseButton::Middle => MouseButton::Middle,
-        WinitMouseButton::Other(4) => MouseButton::X1,
-        WinitMouseButton::Other(5) => MouseButton::X2,
-        WinitMouseButton::Other(6) => MouseButton::Button6,
-        WinitMouseButton::Other(7) => MouseButton::Button7,
-        WinitMouseButton::Other(8) => MouseButton::Button8,
-        _ => MouseButton::Unknown,
     }
 }
