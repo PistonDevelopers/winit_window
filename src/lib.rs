@@ -27,7 +27,7 @@ use winit::{
     },
     event_loop::{ControlFlow, EventLoop},
     platform::run_return::EventLoopExtRunReturn,
-    window::WindowBuilder,
+    window::{CursorGrabMode, WindowBuilder},
 };
 
 pub struct WinitWindow {
@@ -254,7 +254,7 @@ impl AdvancedWindow for WinitWindow {
 
         let window = self.get_window();
         if value {
-            window.set_cursor_grab(true).unwrap();
+            window.set_cursor_grab(CursorGrabMode::Locked).unwrap();
             window.set_cursor_visible(false);
             self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
             let mut center = self.get_window().inner_size().cast::<f64>();
@@ -262,7 +262,7 @@ impl AdvancedWindow for WinitWindow {
             center.height /= 2.;
             self.last_cursor = LogicalPosition::new(center.width, center.height);
         } else {
-            window.set_cursor_grab(false).unwrap();
+            window.set_cursor_grab(CursorGrabMode::None).unwrap();
             window.set_cursor_visible(true);
         }
         self.capture_cursor = value;
@@ -518,5 +518,9 @@ fn map_window_event(window_evnet: WindowEvent) -> Option<Event> {
         WindowEvent::ScaleFactorChanged { .. } => None,
         // TODO: Implement this
         WindowEvent::ThemeChanged(_) => None,
+        // TODO: Implement this
+        WindowEvent::Ime(_) => None,
+        // TODO: Implement this
+        WindowEvent::Occluded(_) => None,
     }
 }

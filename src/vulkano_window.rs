@@ -7,9 +7,9 @@ use window::{AdvancedWindow, Position, Size, Window, WindowSettings};
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
     event::{VirtualKeyCode, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
+    event_loop::{ControlFlow, EventLoop, EventLoopBuilder},
     platform::run_return::EventLoopExtRunReturn,
-    window::WindowBuilder,
+    window::{CursorGrabMode, WindowBuilder},
 };
 
 pub use vulkano_win::required_extensions;
@@ -17,7 +17,8 @@ pub use vulkano_win::required_extensions;
 pub struct VulkanoWindow {
     // TODO: These public fields should be changed to accessors
     pub event_loop: EventLoop<UserEvent>,
-    surface: Arc<Surface<winit::window::Window>>,
+    surface: Arc<Surface>,
+    window: Arc<winit::window::Window>,
 
     should_close: bool,
     queued_events: VecDeque<Event>,
@@ -31,21 +32,23 @@ pub struct VulkanoWindow {
 
 impl VulkanoWindow {
     pub fn new(instance: Arc<Instance>, settings: &WindowSettings) -> Self {
-        use vulkano_win::VkSurfaceBuild;
+        use vulkano_win::{create_surface_from_winit, VkSurfaceBuild};
 
-        let event_loop = EventLoop::with_user_event();
-        let surface = WindowBuilder::new()
+        let event_loop = EventLoopBuilder::with_user_event().build();
+        let window = Arc::new(WindowBuilder::new()
             .with_inner_size(LogicalSize::<f64>::new(
                 settings.get_size().width.into(),
                 settings.get_size().height.into(),
             ))
             .with_title(settings.get_title())
-            .build_vk_surface(&event_loop, instance)
-            .unwrap();
+            .build(&event_loop)
+            .unwrap());
+        let surface = create_surface_from_winit(window.clone(), instance).unwrap();
 
         VulkanoWindow {
             surface,
             event_loop,
+            window,
 
             should_close: false,
             queued_events: VecDeque::new(),
@@ -59,7 +62,7 @@ impl VulkanoWindow {
     }
 
     pub fn get_window(&self) -> &winit::window::Window {
-        self.surface.window()
+        &self.window
     }
 
     fn handle_event<T>(&mut self, event: winit::event::Event<T>, center: PhysicalPosition<f64>) {
@@ -232,7 +235,7 @@ impl AdvancedWindow for VulkanoWindow {
 
         let window = self.get_window();
         if value {
-            window.set_cursor_grab(true).unwrap();
+            window.set_cursor_grab(CursorGrabMode::Locked).unwrap();
             window.set_cursor_visible(false);
             self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
             let mut center = self.get_window().inner_size().cast::<f64>();
@@ -240,7 +243,7 @@ impl AdvancedWindow for VulkanoWindow {
             center.height /= 2.;
             self.last_cursor = LogicalPosition::new(center.width, center.height);
         } else {
-            window.set_cursor_grab(false).unwrap();
+            window.set_cursor_grab(CursorGrabMode::None).unwrap();
             window.set_cursor_visible(true);
         }
         self.capture_cursor = value;

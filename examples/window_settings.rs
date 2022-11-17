@@ -4,7 +4,10 @@ extern crate window;
 extern crate winit_window;
 
 #[cfg(feature = "use-vulkano")]
-use vulkano::instance::{Instance, Version};
+use vulkano::{
+    VulkanLibrary,
+    instance::{Instance, InstanceCreateInfo}
+};
 use window::WindowSettings;
 
 #[cfg(feature = "use-vulkano")]
@@ -12,11 +15,14 @@ use winit_window::VulkanoWindow;
 
 #[cfg(feature = "use-vulkano")]
 fn main() {
+    let library = VulkanLibrary::new().unwrap();
+    let instance_create_info = InstanceCreateInfo {
+        enabled_extensions: winit_window::required_extensions(&library),
+        ..Default::default()
+    };
     let instance = Instance::new(
-        None,
-        Version::V1_2,
-        &winit_window::required_extensions(),
-        None,
+        library,
+        instance_create_info,
     )
     .unwrap();
     let _ = VulkanoWindow::new(instance, &WindowSettings::new("Winit Window", (640, 480)));
