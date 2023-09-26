@@ -8,6 +8,7 @@ use vulkano::{
     VulkanLibrary,
     instance::{Instance, InstanceCreateInfo}
 };
+#[cfg(feature = "use-vulkano")]
 use window::WindowSettings;
 
 #[cfg(feature = "use-vulkano")]

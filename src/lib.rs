@@ -55,7 +55,8 @@ pub enum UserEvent {
 
 impl WinitWindow {
     pub fn new(settings: &WindowSettings) -> Self {
-        let event_loop = EventLoop::with_user_event();
+        use winit::event_loop::EventLoopBuilder;
+        let event_loop = EventLoopBuilder::with_user_event().build();
         let window = WindowBuilder::new()
             .with_inner_size(LogicalSize::<f64>::new(
                 settings.get_size().width.into(),
