@@ -510,7 +510,10 @@ fn map_window_event(window_evnet: WindowEvent) -> Option<Event> {
             )
         }),
         // TODO: Implement this
-        WindowEvent::TouchpadPressure { .. } => None,
+        WindowEvent::TouchpadPressure { .. } |
+        WindowEvent::TouchpadMagnify { .. } |
+        WindowEvent::SmartMagnify { .. } |
+        WindowEvent::TouchpadRotate { .. } => None,
         // TODO: Implement this
         WindowEvent::AxisMotion { .. } => None,
         // TODO: Implement this
