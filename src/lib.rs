@@ -20,22 +20,33 @@ use input::{
 use std::{collections::VecDeque, error::Error, time::Duration};
 use window::{AdvancedWindow, BuildFromWindowSettings, Position, Size, Window, WindowSettings};
 use winit::{
+    application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
     event::{
-        ElementState, KeyboardInput, MouseButton as WinitMouseButton, MouseScrollDelta,
-        VirtualKeyCode, WindowEvent,
+        ElementState, MouseButton as WinitMouseButton, MouseScrollDelta,
+        WindowEvent,
     },
-    event_loop::{ControlFlow, EventLoop},
-    platform::run_return::EventLoopExtRunReturn,
-    window::{CursorGrabMode, WindowBuilder},
+    event_loop::{ActiveEventLoop, EventLoop},
+    window::{CursorGrabMode, WindowId},
 };
 
 pub struct WinitWindow {
-    // TODO: These public fields should be changed to accessors
-    pub event_loop: EventLoop<UserEvent>,
+    /// The event loop of the window.
+    ///
+    /// This is optional because when pumping events using `ApplicationHandler`,
+    /// the event loop can not be owned by `WinitWindow`.
+    pub event_loop: Option<EventLoop<UserEvent>>,
+    /// The Winit window.
+    ///
+    /// This is optional because when creating the window,
+    /// it is only accessible by `ActiveEventLoop::create_window`,
+    /// which in turn requires `ApplicationHandler`.
+    /// One call to `Window::pull_event` is needed to trigger
+    /// Winit to call `ApplicationHandler::request_redraw`,
+    /// which creates the window.
+    pub window: Option<winit::window::Window>,
 
-    window: winit::window::Window,
-
+    settings: WindowSettings,
     should_close: bool,
     queued_events: VecDeque<Event>,
     last_cursor: LogicalPosition<f64>,
@@ -55,21 +66,13 @@ pub enum UserEvent {
 
 impl WinitWindow {
     pub fn new(settings: &WindowSettings) -> Self {
-        use winit::event_loop::EventLoopBuilder;
-        let event_loop = EventLoopBuilder::with_user_event().build();
-        let window = WindowBuilder::new()
-            .with_inner_size(LogicalSize::<f64>::new(
-                settings.get_size().width.into(),
-                settings.get_size().height.into(),
-            ))
-            .with_title(settings.get_title())
-            .build(&event_loop)
-            .unwrap();
+        let event_loop = EventLoop::with_user_event().build().unwrap();
 
-        WinitWindow {
-            window,
-            event_loop,
+        let mut w = WinitWindow {
+            window: None,
+            event_loop: Some(event_loop),
 
+            settings: settings.clone(),
             should_close: false,
             queued_events: VecDeque::new(),
             last_cursor: LogicalPosition::new(0.0, 0.0),
@@ -78,55 +81,53 @@ impl WinitWindow {
             title: settings.get_title(),
             capture_cursor: false,
             exit_on_esc: settings.get_exit_on_esc(),
-        }
+        };
+        // Causes the window to be created through `ApplicationHandler::request_redraw`.
+        if let Some(e) = w.poll_event() {w.queued_events.push_front(e)}
+        w
     }
 
     pub fn get_window(&self) -> &winit::window::Window {
-        &self.window
+        self.window.as_ref().unwrap()
     }
 
-    fn handle_event<T>(&mut self, event: winit::event::Event<T>, center: PhysicalPosition<f64>) {
+    fn handle_event(&mut self, event: winit::event::WindowEvent, center: PhysicalPosition<f64>) {
+        use winit::keyboard::{Key, NamedKey};
+
         match event {
-            winit::event::Event::WindowEvent { event, .. } => {
-                // Special event handling.
-                // Some events are not exposed to user and handled internally.
-                match event {
-                    WindowEvent::KeyboardInput { input, .. } => {
-                        if self.exit_on_esc {
-                            if let Some(VirtualKeyCode::Escape) = input.virtual_keycode {
-                                self.set_should_close(true);
-                                return;
-                            }
-                        }
+            WindowEvent::KeyboardInput { ref event, .. } => {
+                if self.exit_on_esc {
+                    if let Key::Named(NamedKey::Escape) = event.logical_key {
+                        self.set_should_close(true);
+                        return;
                     }
-                    WindowEvent::CursorMoved { position, .. } => {
-                        if self.capture_cursor {
-                            let prev_last_cursor = self.last_cursor;
-                            self.last_cursor =
-                                position.to_logical(self.get_window().scale_factor());
-
-                            // Don't track distance if the position is at the center, this probably is
-                            //  from cursor center lock, or irrelevant.
-                            if position == center {
-                                return;
-                            }
-
-                            // Add the distance to the tracked cursor movement
-                            self.cursor_accumulator.x += position.x - prev_last_cursor.x as f64;
-                            self.cursor_accumulator.y += position.y - prev_last_cursor.y as f64;
-
-                            return;
-                        }
-                    }
-                    _ => {}
-                }
-
-                // Usual events are handled here and passed to user.
-                if let Some(ev) = map_window_event(event) {
-                    self.queued_events.push_back(ev);
                 }
             }
-            _ => (),
+            WindowEvent::CursorMoved { position, .. } => {
+                if self.capture_cursor {
+                    let prev_last_cursor = self.last_cursor;
+                    self.last_cursor =
+                        position.to_logical(self.get_window().scale_factor());
+
+                    // Don't track distance if the position is at the center, this probably is
+                    //  from cursor center lock, or irrelevant.
+                    if position == center {
+                        return;
+                    }
+
+                    // Add the distance to the tracked cursor movement
+                    self.cursor_accumulator.x += position.x - prev_last_cursor.x as f64;
+                    self.cursor_accumulator.y += position.y - prev_last_cursor.y as f64;
+
+                    return;
+                }
+            }
+            _ => {}
+        }
+
+        // Usual events are handled here and passed to user.
+        if let Some(ev) = map_window_event(event) {
+            self.queued_events.push_back(ev);
         }
     }
 }
@@ -174,42 +175,68 @@ impl Window for WinitWindow {
     }
 
     fn wait_event(&mut self) -> Event {
-        // TODO: Implement this
-        unimplemented!()
-    }
-
-    fn wait_event_timeout(&mut self, _timeout: Duration) -> Option<Event> {
-        // TODO: Implement this
-        unimplemented!()
-    }
-
-    fn poll_event(&mut self) -> Option<Event> {
-        let center: (f64, f64) = self.get_window().inner_size().into();
-        let mut center: PhysicalPosition<f64> = center.into();
-        center.x /= 2.;
-        center.y /= 2.;
+        use winit::platform::pump_events::EventLoopExtPumpEvents;
+        use input::{IdleArgs, Loop};
 
         // Add all events we got to the event queue, since winit only allows us to get all pending
         //  events at once.
-        {
-            let mut events: Vec<winit::event::Event<UserEvent>> = Vec::new();
-            let event_loop_proxy = self.event_loop.create_proxy();
+        if let Some(mut event_loop) = std::mem::replace(&mut self.event_loop, None) {
+            let event_loop_proxy = event_loop.create_proxy();
             event_loop_proxy
                 .send_event(UserEvent::WakeUp)
                 .expect("Event loop is closed before property handling all events.");
+            event_loop.pump_app_events(None, self);
+            self.event_loop = Some(event_loop);
+        }
 
-            self.event_loop.run_return(|event, _, control_flow| {
-                if let Some(e) = event.to_static() {
-                    if e == winit::event::Event::UserEvent(UserEvent::WakeUp) {
-                        *control_flow = ControlFlow::Exit;
-                        return;
-                    }
-                    events.push(e);
-                }
-            });
-            for event in events.into_iter() {
-                self.handle_event(event, center)
-            }
+        // Get the first event in the queue
+        let event = self.queued_events.pop_front();
+
+        // Check if we got a close event, if we did we need to mark ourselves as should-close
+        if let &Some(Event::Input(Input::Close(_), ..)) = &event {
+            self.set_should_close(true);
+        }
+
+        event.unwrap_or(Event::Loop(Loop::Idle(IdleArgs {dt: 0.0})))
+    }
+
+    fn wait_event_timeout(&mut self, timeout: Duration) -> Option<Event> {
+        use winit::platform::pump_events::EventLoopExtPumpEvents;
+
+        // Add all events we got to the event queue, since winit only allows us to get all pending
+        //  events at once.
+        if let Some(mut event_loop) = std::mem::replace(&mut self.event_loop, None) {
+            let event_loop_proxy = event_loop.create_proxy();
+            event_loop_proxy
+                .send_event(UserEvent::WakeUp)
+                .expect("Event loop is closed before property handling all events.");
+            event_loop.pump_app_events(Some(timeout), self);
+            self.event_loop = Some(event_loop);
+        }
+
+        // Get the first event in the queue
+        let event = self.queued_events.pop_front();
+
+        // Check if we got a close event, if we did we need to mark ourselves as should-close
+        if let &Some(Event::Input(Input::Close(_), ..)) = &event {
+            self.set_should_close(true);
+        }
+
+        event
+    }
+
+    fn poll_event(&mut self) -> Option<Event> {
+        use winit::platform::pump_events::EventLoopExtPumpEvents;
+
+        // Add all events we got to the event queue, since winit only allows us to get all pending
+        //  events at once.
+        if let Some(mut event_loop) = std::mem::replace(&mut self.event_loop, None) {
+            let event_loop_proxy = event_loop.create_proxy();
+            event_loop_proxy
+                .send_event(UserEvent::WakeUp)
+                .expect("Event loop is closed before property handling all events.");
+            event_loop.pump_app_events(Some(Duration::ZERO), self);
+            self.event_loop = Some(event_loop);
         }
 
         // Get the first event in the queue
@@ -227,6 +254,47 @@ impl Window for WinitWindow {
         let size: (f64, f64) = self.get_window().inner_size().into();
         size.into()
     }
+}
+
+impl ApplicationHandler<UserEvent> for WinitWindow {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        let settings = &self.settings;
+        let window = event_loop.create_window(winit::window::Window::default_attributes()
+            .with_inner_size(LogicalSize::<f64>::new(
+                settings.get_size().width.into(),
+                settings.get_size().height.into(),
+            ))
+            .with_title(settings.get_title())
+        ).unwrap();
+        self.window = Some(window);
+    }
+
+    fn window_event(
+            &mut self,
+            event_loop: &ActiveEventLoop,
+            _window_id: WindowId,
+            event: WindowEvent,
+        ) {
+            let window =  &self.get_window();
+
+            match event {
+                WindowEvent::CloseRequested => {
+                    self.should_close = true;
+                    event_loop.exit();
+                }
+                WindowEvent::RedrawRequested => {
+                    window.request_redraw();
+                },
+                event => {
+                    let center: (f64, f64) = self.get_window().inner_size().into();
+                    let mut center: PhysicalPosition<f64> = center.into();
+                    center.x /= 2.;
+                    center.y /= 2.;
+
+                    self.handle_event(event, center)
+                }
+            }
+        }
 }
 
 impl AdvancedWindow for WinitWindow {
@@ -301,7 +369,7 @@ impl AdvancedWindow for WinitWindow {
     fn set_size<S: Into<Size>>(&mut self, size: S) {
         let size: Size = size.into();
         let hidpi = self.get_window().scale_factor();
-        self.get_window().set_inner_size(LogicalSize::new(
+        let _ = self.get_window().request_inner_size(LogicalSize::new(
             size.width as f64 * hidpi,
             size.height as f64 * hidpi,
         ));
@@ -315,94 +383,91 @@ impl BuildFromWindowSettings for WinitWindow {
     }
 }
 
-fn map_key(input: &KeyboardInput) -> Key {
-    use winit::event::VirtualKeyCode::*;
+fn map_key(input: &winit::event::KeyEvent) -> Key {
+    use winit::keyboard::NamedKey::*;
+    use winit::keyboard::Key::*;
+
     // TODO: Complete the lookup match
-    if let Some(vk) = input.virtual_keycode {
-        match vk {
-            Key1 => Key::D1,
-            Key2 => Key::D2,
-            Key3 => Key::D3,
-            Key4 => Key::D4,
-            Key5 => Key::D5,
-            Key6 => Key::D6,
-            Key7 => Key::D7,
-            Key8 => Key::D8,
-            Key9 => Key::D9,
-            Key0 => Key::D0,
-            A => Key::A,
-            B => Key::B,
-            C => Key::C,
-            D => Key::D,
-            E => Key::E,
-            F => Key::F,
-            G => Key::G,
-            H => Key::H,
-            I => Key::I,
-            J => Key::J,
-            K => Key::K,
-            L => Key::L,
-            M => Key::M,
-            N => Key::N,
-            O => Key::O,
-            P => Key::P,
-            Q => Key::Q,
-            R => Key::R,
-            S => Key::S,
-            T => Key::T,
-            U => Key::U,
-            V => Key::V,
-            W => Key::W,
-            X => Key::X,
-            Y => Key::Y,
-            Z => Key::Z,
-            Escape => Key::Escape,
-            F1 => Key::F1,
-            F2 => Key::F2,
-            F3 => Key::F3,
-            F4 => Key::F4,
-            F5 => Key::F5,
-            F6 => Key::F6,
-            F7 => Key::F7,
-            F8 => Key::F8,
-            F9 => Key::F9,
-            F10 => Key::F10,
-            F11 => Key::F11,
-            F12 => Key::F12,
-            F13 => Key::F13,
-            F14 => Key::F14,
-            F15 => Key::F15,
-
-            Delete => Key::Delete,
-
-            Left => Key::Left,
-            Up => Key::Up,
-            Right => Key::Right,
-            Down => Key::Down,
-
-            Back => Key::Backspace,
-            Return => Key::Return,
-            Space => Key::Space,
-
-            LAlt => Key::LAlt,
-            LControl => Key::LCtrl,
-            LWin => Key::Menu,
-            LShift => Key::LShift,
-
-            RAlt => Key::LAlt,
-            RControl => Key::RCtrl,
-            RWin => Key::Menu,
-            RShift => Key::RShift,
-
-            Tab => Key::Tab,
+    match input.logical_key {
+        Character(ref ch) => match ch.as_str() {
+            "0" => Key::D0,
+            "1" => Key::D1,
+            "2" => Key::D2,
+            "3" => Key::D3,
+            "4" => Key::D4,
+            "5" => Key::D5,
+            "6" => Key::D6,
+            "7" => Key::D7,
+            "8" => Key::D8,
+            "9" => Key::D9,
+            "a" => Key::A,
+            "b" => Key::B,
+            "c" => Key::C,
+            "d" => Key::D,
+            "e" => Key::E,
+            "f" => Key::F,
+            "g" => Key::G,
+            "h" => Key::H,
+            "i" => Key::I,
+            "j" => Key::J,
+            "k" => Key::K,
+            "l" => Key::L,
+            "m" => Key::M,
+            "n" => Key::N,
+            "o" => Key::O,
+            "p" => Key::P,
+            "q" => Key::Q,
+            "r" => Key::R,
+            "s" => Key::S,
+            "t" => Key::T,
+            "u" => Key::U,
+            "v" => Key::V,
+            "w" => Key::W,
+            "x" => Key::X,
+            "y" => Key::Y,
+            "z" => Key::Z,
             _ => Key::Unknown,
         }
-    } else {
-        Key::Unknown
+        Named(Escape) => Key::Escape,
+        Named(F1) => Key::F1,
+        Named(F2) => Key::F2,
+        Named(F3) => Key::F3,
+        Named(F4) => Key::F4,
+        Named(F5) => Key::F5,
+        Named(F6) => Key::F6,
+        Named(F7) => Key::F7,
+        Named(F8) => Key::F8,
+        Named(F9) => Key::F9,
+        Named(F10) => Key::F10,
+        Named(F11) => Key::F11,
+        Named(F12) => Key::F12,
+        Named(F13) => Key::F13,
+        Named(F14) => Key::F14,
+        Named(F15) => Key::F15,
+
+        Named(Delete) => Key::Delete,
+
+        Named(ArrowLeft) => Key::Left,
+        Named(ArrowUp) => Key::Up,
+        Named(ArrowRight) => Key::Right,
+        Named(ArrowDown) => Key::Down,
+
+        Named(Backspace) => Key::Backspace,
+        Named(Enter) => Key::Return,
+        Named(Space) => Key::Space,
+
+        Named(Alt) => Key::LAlt,
+        Named(AltGraph) => Key::RAlt,
+        Named(Control) => Key::LCtrl,
+        Named(Super) => Key::Menu,
+        Named(Shift) => Key::LShift,
+
+        Named(Tab) => Key::Tab,
+        _ => Key::Unknown,
     }
 }
 
-fn map_keyboard_input(input: &KeyboardInput) -> Event {
+fn map_keyboard_input(input: &winit::event::KeyEvent) -> Event {
     let key = map_key(input);
 
     let state = if input.state == ElementState::Pressed {
@@ -415,7 +480,9 @@ fn map_keyboard_input(input: &KeyboardInput) -> Event {
         Input::Button(ButtonArgs {
             state: state,
             button: Button::Keyboard(key),
-            scancode: Some(input.scancode as i32),
+            scancode: if let winit::keyboard::PhysicalKey::Code(code) = input.physical_key {
+                    Some(code as i32)
+                } else {None},
         }),
         None,
     )
@@ -438,13 +505,16 @@ fn map_mouse_button(button: WinitMouseButton) -> MouseButton {
 /// Converts a winit's [`WindowEvent`] into a piston's [`Event`].
 ///
 /// For some events that will not be passed to the user, returns `None`.
-fn map_window_event(window_evnet: WindowEvent) -> Option<Event> {
-    match window_evnet {
-        // TODO: This event needs to be added to pistoncore-input, see issue
-        //  PistonDevelopers/piston#1117
-        //WindowEvent::DroppedFile(path) => {
-        //    Input::Custom(EventId("DroppedFile"), Arc::new(path))
-        //},
+fn map_window_event(window_event: WindowEvent) -> Option<Event> {
+    use input::FileDrag;
+
+    match window_event {
+        WindowEvent::DroppedFile(path) =>
+            Some(Event::Input(Input::FileDrag(FileDrag::Drop(path)), None)),
+        WindowEvent::HoveredFile(path) =>
+            Some(Event::Input(Input::FileDrag(FileDrag::Hover(path)), None)),
+        WindowEvent::HoveredFileCancelled =>
+            Some(Event::Input(Input::FileDrag(FileDrag::Cancel), None)),
         WindowEvent::Resized(size) => Some(Event::Input(
             Input::Resize(ResizeArgs {
                 window_size: [size.width as f64, size.height as f64],
@@ -459,24 +529,11 @@ fn map_window_event(window_evnet: WindowEvent) -> Option<Event> {
         // TODO: Implement this
         WindowEvent::Moved(_) => None,
         WindowEvent::CloseRequested => Some(Event::Input(Input::Close(CloseArgs), None)),
-        // TODO: Implement this
-        WindowEvent::Destroyed => None,
-        // TODO: Implement this
-        WindowEvent::DroppedFile(_) => None,
-        // TODO: Implement this
-        WindowEvent::HoveredFile(_) => None,
-        // TODO: Implement this
-        WindowEvent::HoveredFileCancelled => None,
-        WindowEvent::ReceivedCharacter(c) => match c {
-            // Ignore control characters
-            '\u{7f}' | // Delete
-            '\u{1b}' | // Escape
-            '\u{8}'  | // Backspace
-            '\r' | '\n' | '\t' => None,
-            _ => Some(Event::Input(Input::Text(c.to_string()), None)),
-        },
+        WindowEvent::Destroyed => Some(Event::Input(Input::Close(CloseArgs), None)),
         WindowEvent::Focused(focused) => Some(Event::Input(Input::Focus(focused), None)),
-        WindowEvent::KeyboardInput { input, .. } => Some(map_keyboard_input(&input)),
+        WindowEvent::KeyboardInput { ref event, .. } => {
+            Some(map_keyboard_input(event))
+        }
         // TODO: Implement this
         WindowEvent::ModifiersChanged(_) => None,
         WindowEvent::CursorMoved { position, .. } => Some(Event::Input(
@@ -511,9 +568,10 @@ fn map_window_event(window_evnet: WindowEvent) -> Option<Event> {
         }),
         // TODO: Implement this
         WindowEvent::TouchpadPressure { .. } |
-        WindowEvent::TouchpadMagnify { .. } |
-        WindowEvent::SmartMagnify { .. } |
-        WindowEvent::TouchpadRotate { .. } => None,
+        WindowEvent::PinchGesture { .. } |
+        WindowEvent::RotationGesture { .. } |
+        WindowEvent::PanGesture { .. } |
+        WindowEvent::DoubleTapGesture { .. } => None,
         // TODO: Implement this
         WindowEvent::AxisMotion { .. } => None,
         // TODO: Implement this
@@ -521,10 +579,14 @@ fn map_window_event(window_evnet: WindowEvent) -> Option<Event> {
         // TODO: Implement this
         WindowEvent::ScaleFactorChanged { .. } => None,
         // TODO: Implement this
+        WindowEvent::ActivationTokenDone { .. } => None,
+        // TODO: Implement this
         WindowEvent::ThemeChanged(_) => None,
         // TODO: Implement this
         WindowEvent::Ime(_) => None,
         // TODO: Implement this
         WindowEvent::Occluded(_) => None,
+        // TODO: Implement this
+        WindowEvent::RedrawRequested { .. } => None,
     }
 }
