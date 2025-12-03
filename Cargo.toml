@@ -11,7 +11,6 @@ homepage = "https://github.com/pistondevelopers/winit_window"
 
 [features]
 default = []
-use-vulkano = ["vulkano", "vulkano-win"]
 
 [lib]
 name = "winit_window"
@@ -21,11 +20,3 @@ path = "src/lib.rs"
 winit = "0.30.12"
 pistoncore-input = "1.0.0"
 pistoncore-window = "1.0.0"
-
-[dependencies.vulkano]
-version = "0.34.0"
-optional = true
-
-[dependencies.vulkano-win]
-version = "0.34.0"
-optional = true
