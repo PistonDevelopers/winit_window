@@ -1,20 +1,10 @@
 //! A [winit](https://crates.io/crates/winit) window back-end for the Piston game engine.
 
 extern crate input;
-#[cfg(feature = "use-vulkano")]
-extern crate vulkano;
-#[cfg(feature = "use-vulkano")]
-extern crate vulkano_win;
 extern crate window;
 extern crate winit;
 
-#[cfg(feature = "use-vulkano")]
-mod vulkano_window;
-
 use std::sync::Arc;
-
-#[cfg(feature = "use-vulkano")]
-pub use vulkano_window::{required_extensions, VulkanoWindow};
 
 use input::{
     Button, ButtonArgs, ButtonState, CloseArgs, Event, Input, Key, Motion, MouseButton, ResizeArgs,
@@ -389,7 +379,6 @@ impl AdvancedWindow for WinitWindow {
     }
 }
 
-#[cfg(not(feature = "use-vulkano"))]
 impl BuildFromWindowSettings for WinitWindow {
     fn build_from_window_settings(settings: &WindowSettings) -> Result<Self, Box<dyn Error>> {
         Ok(Self::new(settings))
