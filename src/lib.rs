@@ -11,6 +11,8 @@ extern crate winit;
 #[cfg(feature = "use-vulkano")]
 mod vulkano_window;
 
+use std::sync::Arc;
+
 #[cfg(feature = "use-vulkano")]
 pub use vulkano_window::{required_extensions, VulkanoWindow};
 
@@ -44,7 +46,7 @@ pub struct WinitWindow {
     /// One call to `Window::pull_event` is needed to trigger
     /// Winit to call `ApplicationHandler::request_redraw`,
     /// which creates the window.
-    pub window: Option<winit::window::Window>,
+    pub window: Option<Arc<winit::window::Window>>,
 
     settings: WindowSettings,
     should_close: bool,
@@ -87,8 +89,16 @@ impl WinitWindow {
         w
     }
 
-    pub fn get_window(&self) -> &winit::window::Window {
+    /// Gets a reference to the window.
+    ///
+    /// This is faster than [get_window], but borrows self.
+    pub fn get_window_ref(&self) -> &winit::window::Window {
         self.window.as_ref().unwrap()
+    }
+
+    /// Returns a cloned smart pointer to the underlying Winit window.
+    pub fn get_window(&self) -> Arc<winit::window::Window> {
+        self.window.as_ref().unwrap().clone()
     }
 
     fn handle_event(&mut self, event: winit::event::WindowEvent, center: PhysicalPosition<f64>) {
@@ -107,7 +117,7 @@ impl WinitWindow {
                 if self.capture_cursor {
                     let prev_last_cursor = self.last_cursor;
                     self.last_cursor =
-                        position.to_logical(self.get_window().scale_factor());
+                        position.to_logical(self.get_window_ref().scale_factor());
 
                     // Don't track distance if the position is at the center, this probably is
                     //  from cursor center lock, or irrelevant.
@@ -142,8 +152,9 @@ impl Window for WinitWindow {
     }
 
     fn size(&self) -> Size {
-        let (w, h): (u32, u32) = self.get_window().inner_size().into();
-        let hidpi = self.get_window().scale_factor();
+        let window = self.get_window_ref();
+        let (w, h): (u32, u32) = window.inner_size().into();
+        let hidpi = window.scale_factor();
         ((w as f64 / hidpi) as u32, (h as f64 / hidpi) as u32).into()
     }
 
@@ -153,13 +164,13 @@ impl Window for WinitWindow {
         //  detecting the end of a frame, which we can use to gather up cursor_accumulator data.
 
         if self.capture_cursor {
-            let center: (f64, f64) = self.get_window().inner_size().into();
+            let center: (f64, f64) = self.get_window_ref().inner_size().into();
             let mut center: PhysicalPosition<f64> = center.into();
             center.x /= 2.;
             center.y /= 2.;
 
             // Center-lock the cursor if we're using capture_cursor
-            self.get_window().set_cursor_position(center).unwrap();
+            self.get_window_ref().set_cursor_position(center).unwrap();
 
             // Create a relative input based on the distance from the center
             self.queued_events.push_back(Event::Input(
@@ -251,7 +262,7 @@ impl Window for WinitWindow {
     }
 
     fn draw_size(&self) -> Size {
-        let size: (f64, f64) = self.get_window().inner_size().into();
+        let size: (f64, f64) = self.get_window_ref().inner_size().into();
         size.into()
     }
 }
@@ -266,7 +277,7 @@ impl ApplicationHandler<UserEvent> for WinitWindow {
             ))
             .with_title(settings.get_title())
         ).unwrap();
-        self.window = Some(window);
+        self.window = Some(Arc::new(window));
     }
 
     fn window_event(
@@ -275,7 +286,7 @@ impl ApplicationHandler<UserEvent> for WinitWindow {
             _window_id: WindowId,
             event: WindowEvent,
         ) {
-            let window =  &self.get_window();
+            let window =  &self.get_window_ref();
 
             match event {
                 WindowEvent::CloseRequested => {
@@ -286,7 +297,7 @@ impl ApplicationHandler<UserEvent> for WinitWindow {
                     window.request_redraw();
                 },
                 event => {
-                    let center: (f64, f64) = self.get_window().inner_size().into();
+                    let center: (f64, f64) = self.get_window_ref().inner_size().into();
                     let mut center: PhysicalPosition<f64> = center.into();
                     center.x /= 2.;
                     center.y /= 2.;
@@ -303,7 +314,7 @@ impl AdvancedWindow for WinitWindow {
     }
 
     fn set_title(&mut self, value: String) {
-        self.get_window().set_title(&value);
+        self.get_window_ref().set_title(&value);
         self.title = value;
     }
 
@@ -321,16 +332,17 @@ impl AdvancedWindow for WinitWindow {
             return;
         }
 
-        let window = self.get_window();
         if value {
+            self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
+            let window = self.get_window_ref();
             window.set_cursor_grab(CursorGrabMode::Locked).unwrap();
             window.set_cursor_visible(false);
-            self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
-            let mut center = self.get_window().inner_size().cast::<f64>();
+            let mut center = window.inner_size().cast::<f64>();
             center.width /= 2.;
             center.height /= 2.;
             self.last_cursor = LogicalPosition::new(center.width, center.height);
         } else {
+            let window = self.get_window_ref();
             window.set_cursor_grab(CursorGrabMode::None).unwrap();
             window.set_cursor_visible(true);
         }
@@ -346,15 +358,15 @@ impl AdvancedWindow for WinitWindow {
     }
 
     fn show(&mut self) {
-        self.get_window().set_visible(true);
+        self.get_window_ref().set_visible(true);
     }
 
     fn hide(&mut self) {
-        self.get_window().set_visible(false);
+        self.get_window_ref().set_visible(false);
     }
 
     fn get_position(&self) -> Option<Position> {
-        self.get_window()
+        self.get_window_ref()
             .outer_position()
             .map(|p| Position { x: p.x, y: p.y })
             .ok()
@@ -362,14 +374,15 @@ impl AdvancedWindow for WinitWindow {
 
     fn set_position<P: Into<Position>>(&mut self, val: P) {
         let val = val.into();
-        self.get_window()
+        self.get_window_ref()
             .set_outer_position(LogicalPosition::new(val.x as f64, val.y as f64))
     }
 
     fn set_size<S: Into<Size>>(&mut self, size: S) {
         let size: Size = size.into();
-        let hidpi = self.get_window().scale_factor();
-        let _ = self.get_window().request_inner_size(LogicalSize::new(
+        let w = self.get_window_ref();
+        let hidpi = w.scale_factor();
+        let _ = w.request_inner_size(LogicalSize::new(
             size.width as f64 * hidpi,
             size.height as f64 * hidpi,
         ));
