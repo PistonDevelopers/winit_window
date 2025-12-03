@@ -1,7 +1,10 @@
 [package]
 name = "pistoncore-winit_window"
-version = "0.18.0"
-authors = ["Layl <LaylConway@users.noreply.github.com>"]
+version = "0.19.0"
+authors = [
+  "Layl <LaylConway@users.noreply.github.com>",
+  "Sven Nilsen <bvssvni@gmail.com",
+]
 keywords = ["winit", "window", "piston"]
 description = "A winit back-end for pistoncore-window"
 license = "MIT OR Apache-2.0"
