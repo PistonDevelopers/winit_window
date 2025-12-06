@@ -126,7 +126,7 @@ impl WinitWindow {
         }
 
         // Usual events are handled here and passed to user.
-        if let Some(ev) = map_window_event(event) {
+        if let Some(ev) = map_window_event(event, self.get_window_ref().scale_factor()) {
             self.queued_events.push_back(ev);
         }
     }
@@ -507,7 +507,7 @@ fn map_mouse_button(button: WinitMouseButton) -> MouseButton {
 /// Converts a winit's [`WindowEvent`] into a piston's [`Event`].
 ///
 /// For some events that will not be passed to the user, returns `None`.
-fn map_window_event(window_event: WindowEvent) -> Option<Event> {
+fn map_window_event(window_event: WindowEvent, scale_factor: f64) -> Option<Event> {
     use input::FileDrag;
 
     match window_event {
@@ -538,15 +538,19 @@ fn map_window_event(window_event: WindowEvent) -> Option<Event> {
         }
         // TODO: Implement this
         WindowEvent::ModifiersChanged(_) => None,
-        WindowEvent::CursorMoved { position, .. } => Some(Event::Input(
-            Input::Move(Motion::MouseCursor([position.x, position.y])),
-            None,
-        )),
+        WindowEvent::CursorMoved { position, .. } => {
+            let position = position.to_logical(scale_factor);
+            Some(Event::Input(
+                Input::Move(Motion::MouseCursor([position.x, position.y])),
+                None,
+            ))
+        }
         WindowEvent::CursorEntered { .. } => Some(Event::Input(Input::Cursor(true), None)),
         WindowEvent::CursorLeft { .. } => Some(Event::Input(Input::Cursor(false), None)),
         WindowEvent::MouseWheel { delta, .. } => Some(match delta {
-            MouseScrollDelta::PixelDelta(PhysicalPosition { x, y }) => {
-                Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None)
+            MouseScrollDelta::PixelDelta(position) => {
+                let position = position.to_logical(scale_factor);
+                Event::Input(Input::Move(Motion::MouseScroll([position.x, position.y])), None)
             }
             MouseScrollDelta::LineDelta(x, y) => {
                 Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None)
