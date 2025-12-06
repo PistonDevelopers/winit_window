@@ -40,6 +40,7 @@ pub struct WinitWindow {
 
     settings: WindowSettings,
     should_close: bool,
+    automatic_close: bool,
     queued_events: VecDeque<Event>,
     last_cursor: LogicalPosition<f64>,
     cursor_accumulator: LogicalPosition<f64>,
@@ -66,6 +67,7 @@ impl WinitWindow {
 
             settings: settings.clone(),
             should_close: false,
+            automatic_close: settings.get_automatic_close(),
             queued_events: VecDeque::new(),
             last_cursor: LogicalPosition::new(0.0, 0.0),
             cursor_accumulator: LogicalPosition::new(0.0, 0.0),
@@ -280,8 +282,10 @@ impl ApplicationHandler<UserEvent> for WinitWindow {
 
             match event {
                 WindowEvent::CloseRequested => {
-                    self.should_close = true;
-                    event_loop.exit();
+                    if self.automatic_close {
+                        self.should_close = true;
+                        event_loop.exit();
+                    }
                 }
                 WindowEvent::RedrawRequested => {
                     window.request_redraw();
@@ -339,13 +343,9 @@ impl AdvancedWindow for WinitWindow {
         self.capture_cursor = value;
     }
 
-    fn get_automatic_close(&self) -> bool {
-        false
-    }
+    fn get_automatic_close(&self) -> bool {self.automatic_close}
 
-    fn set_automatic_close(&mut self, _value: bool) {
-        // TODO: Implement this
-    }
+    fn set_automatic_close(&mut self, value: bool) {self.automatic_close = value}
 
     fn show(&mut self) {
         self.get_window_ref().set_visible(true);
