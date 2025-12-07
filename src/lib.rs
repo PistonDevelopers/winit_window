@@ -751,8 +751,21 @@ fn map_window_event(
         WindowEvent::DoubleTapGesture { .. } => None,
         // TODO: Implement this
         WindowEvent::AxisMotion { .. } => None,
-        // TODO: Implement this
-        WindowEvent::Touch(_) => None,
+        WindowEvent::Touch(winit::event::Touch { phase, location, id, .. }) => {
+            use winit::event::TouchPhase;
+            use input::{Touch, TouchArgs};
+
+            let location = location.to_logical::<f64>(scale_factor);
+
+            Some(Input::Move(Motion::Touch(TouchArgs::new(
+                0, id as i64, [location.x, location.y], 1.0, match phase {
+                    TouchPhase::Started => Touch::Start,
+                    TouchPhase::Moved => Touch::Move,
+                    TouchPhase::Ended => Touch::End,
+                    TouchPhase::Cancelled => Touch::Cancel
+                }
+            ))))
+        }
         // TODO: Implement this
         WindowEvent::ScaleFactorChanged { .. } => None,
         // TODO: Implement this
