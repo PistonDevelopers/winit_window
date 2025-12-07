@@ -15,12 +15,58 @@ use winit::{
     application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
     event::{
-        ElementState, MouseButton as WinitMouseButton, MouseScrollDelta,
+        ElementState,
+        MouseScrollDelta,
         WindowEvent,
     },
     event_loop::{ActiveEventLoop, EventLoop},
     window::{CursorGrabMode, WindowId},
 };
+
+/// Settings for whether to ignore modifiers and use standard keyboard layouts instead.
+///
+/// This does not affect `piston::input::TextEvent`.
+///
+/// Piston uses the same key codes as in SDL2.
+/// The problem is that without knowing the keyboard layout,
+/// there is no coherent way of generating key codes.
+///
+/// This option choose different tradeoffs depending on need.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum KeyboardIgnoreModifiers {
+    /// Keep the key codes that are affected by modifiers.
+    ///
+    /// This is a good default for most applications.
+    /// However, make sure to display understandable information to the user.
+    ///
+    /// If you experience user problems among gamers,
+    /// then you might consider allowing other options in your game engine.
+    /// Some gamers might be used to how stuff works in other traditional game engines
+    /// and struggle understanding this configuration, depending on how you use keyboard layout.
+    None,
+    /// Assume the user's keyboard layout is standard English ABC.
+    ///
+    /// In some non-English speaking countries, this might be more user friendly for some gamers.
+    ///
+    /// This might sound counter-intuitive at first, so here is the reason:
+    ///
+    /// Gamers can customize their keyboard layout without needing to understand scan codes.
+    /// When gamers want physically accuracy with good default options,
+    /// they can simply use standard English ABC.
+    ///
+    /// In other cases, this option displays understandable information for game instructions.
+    /// This information makes it easier for users to correct the problem themselves.
+    ///
+    /// Most gaming consoles use standard controllers.
+    /// Typically, the only device that might be problematic for users is the keyboard.
+    /// Instead of solving this problem in your game engine, let users do it in the OS.
+    ///
+    /// This option gives more control to users and is also better for user data privacy.
+    /// Detecting keyboard layout is usually not needed.
+    /// Instead, provide options for the user where they can modify the keys.
+    /// If users want to switch layout in the middle of a game, they can do it through the OS.
+    AbcKeyCode,
+}
 
 pub struct WinitWindow {
     /// The event loop of the window.
@@ -28,6 +74,10 @@ pub struct WinitWindow {
     /// This is optional because when pumping events using `ApplicationHandler`,
     /// the event loop can not be owned by `WinitWindow`.
     pub event_loop: Option<EventLoop<UserEvent>>,
+    /// Sets keyboard layout.
+    ///
+    /// When set, the key codes are
+    pub keyboard_ignore_modifiers: KeyboardIgnoreModifiers,
     /// The Winit window.
     ///
     /// This is optional because when creating the window,
@@ -37,17 +87,19 @@ pub struct WinitWindow {
     /// Winit to call `ApplicationHandler::request_redraw`,
     /// which creates the window.
     pub window: Option<Arc<winit::window::Window>>,
-
     settings: WindowSettings,
+    // The back-end does not remember the title.
+    title: String,
+    exit_on_esc: bool,
     should_close: bool,
     automatic_close: bool,
-    queued_events: VecDeque<Event>,
     last_cursor: LogicalPosition<f64>,
     cursor_accumulator: LogicalPosition<f64>,
-
-    title: String,
     capture_cursor: bool,
-    exit_on_esc: bool,
+    // Used to filter repeated key presses (does not affect text repeat).
+    last_key_pressed: Option<input::Key>,
+    // Stores list of events ready for processing.
+    events: VecDeque<Event>,
 }
 
 /// Custom events for the winit event loop
@@ -62,22 +114,24 @@ impl WinitWindow {
         let event_loop = EventLoop::with_user_event().build().unwrap();
 
         let mut w = WinitWindow {
-            window: None,
             event_loop: Some(event_loop),
+            keyboard_ignore_modifiers: KeyboardIgnoreModifiers::None,
+            window: None,
 
             settings: settings.clone(),
             should_close: false,
             automatic_close: settings.get_automatic_close(),
-            queued_events: VecDeque::new(),
+            events: VecDeque::new(),
             last_cursor: LogicalPosition::new(0.0, 0.0),
             cursor_accumulator: LogicalPosition::new(0.0, 0.0),
+            last_key_pressed: None,
 
             title: settings.get_title(),
             capture_cursor: false,
             exit_on_esc: settings.get_exit_on_esc(),
         };
         // Causes the window to be created through `ApplicationHandler::request_redraw`.
-        if let Some(e) = w.poll_event() {w.queued_events.push_front(e)}
+        if let Some(e) = w.poll_event() {w.events.push_front(e)}
         w
     }
 
@@ -93,16 +147,38 @@ impl WinitWindow {
         self.window.as_ref().unwrap().clone()
     }
 
-    fn handle_event(&mut self, event: winit::event::WindowEvent, center: PhysicalPosition<f64>) {
+    fn handle_event(
+        &mut self,
+        event: winit::event::WindowEvent,
+        center: PhysicalPosition<f64>,
+        unknown: &mut bool,
+    ) -> Option<Input> {
         use winit::keyboard::{Key, NamedKey};
 
         match event {
-            WindowEvent::KeyboardInput { ref event, .. } => {
+            WindowEvent::KeyboardInput { event: ref ev, .. } => {
                 if self.exit_on_esc {
-                    if let Key::Named(NamedKey::Escape) = event.logical_key {
+                    if let Key::Named(NamedKey::Escape) = ev.logical_key {
                         self.set_should_close(true);
-                        return;
+                        return None;
                     }
+                }
+                if let Some(s) = &ev.text {
+                    let s = s.to_string();
+                    let repeat = ev.repeat;
+                    if !repeat {
+                        if let Some(input) = map_window_event(
+                            event,
+                            self.get_window_ref().scale_factor(),
+                            self.keyboard_ignore_modifiers,
+                            unknown,
+                            &mut self.last_key_pressed,
+                        ) {
+                            self.events.push_back(Event::Input(input, None));
+                        }
+                    }
+
+                    return Some(Input::Text(s));
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -114,23 +190,27 @@ impl WinitWindow {
                     // Don't track distance if the position is at the center, this probably is
                     //  from cursor center lock, or irrelevant.
                     if position == center {
-                        return;
+                        return None;
                     }
 
                     // Add the distance to the tracked cursor movement
                     self.cursor_accumulator.x += position.x - prev_last_cursor.x as f64;
                     self.cursor_accumulator.y += position.y - prev_last_cursor.y as f64;
 
-                    return;
+                    return None;
                 }
             }
             _ => {}
         }
 
         // Usual events are handled here and passed to user.
-        if let Some(ev) = map_window_event(event, self.get_window_ref().scale_factor()) {
-            self.queued_events.push_back(ev);
-        }
+        map_window_event(
+            event,
+            self.get_window_ref().scale_factor(),
+            self.keyboard_ignore_modifiers,
+            unknown,
+            &mut self.last_key_pressed,
+        )
     }
 }
 
@@ -165,7 +245,7 @@ impl Window for WinitWindow {
             self.get_window_ref().set_cursor_position(center).unwrap();
 
             // Create a relative input based on the distance from the center
-            self.queued_events.push_back(Event::Input(
+            self.events.push_back(Event::Input(
                 Input::Move(Motion::MouseRelative([
                     self.cursor_accumulator.x,
                     self.cursor_accumulator.y,
@@ -193,7 +273,7 @@ impl Window for WinitWindow {
         }
 
         // Get the first event in the queue
-        let event = self.queued_events.pop_front();
+        let event = self.events.pop_front();
 
         // Check if we got a close event, if we did we need to mark ourselves as should-close
         if let &Some(Event::Input(Input::Close(_), ..)) = &event {
@@ -218,7 +298,7 @@ impl Window for WinitWindow {
         }
 
         // Get the first event in the queue
-        let event = self.queued_events.pop_front();
+        let event = self.events.pop_front();
 
         // Check if we got a close event, if we did we need to mark ourselves as should-close
         if let &Some(Event::Input(Input::Close(_), ..)) = &event {
@@ -243,7 +323,7 @@ impl Window for WinitWindow {
         }
 
         // Get the first event in the queue
-        let event = self.queued_events.pop_front();
+        let event = self.events.pop_front();
 
         // Check if we got a close event, if we did we need to mark ourselves as should-close
         if let &Some(Event::Input(Input::Close(_), ..)) = &event {
@@ -296,7 +376,12 @@ impl ApplicationHandler<UserEvent> for WinitWindow {
                     center.x /= 2.;
                     center.y /= 2.;
 
-                    self.handle_event(event, center)
+                    let mut unknown = false;
+                    if let Some(ev) = self.handle_event(event, center, &mut unknown) {
+                        if !unknown {
+                            self.events.push_back(Event::Input(ev, None));
+                        }
+                    }
                 }
             }
         }
@@ -385,49 +470,100 @@ impl BuildFromWindowSettings for WinitWindow {
     }
 }
 
-fn map_key(input: &winit::event::KeyEvent) -> Key {
+fn map_key(input: &winit::event::KeyEvent, kim: KeyboardIgnoreModifiers) -> Key {
     use winit::keyboard::NamedKey::*;
     use winit::keyboard::Key::*;
+    use KeyboardIgnoreModifiers as KIM;
 
     // TODO: Complete the lookup match
     match input.logical_key {
         Character(ref ch) => match ch.as_str() {
+            "0" | ")" if kim == KIM::AbcKeyCode => Key::D0,
             "0" => Key::D0,
+            ")" => Key::RightParen,
+            "1" | "!" if kim == KIM::AbcKeyCode => Key::D1,
             "1" => Key::D1,
+            "!" => Key::NumPadExclam,
+            "2" | "@" if kim == KIM::AbcKeyCode => Key::D2,
             "2" => Key::D2,
+            "@" => Key::At,
+            "3" | "#" if kim == KIM::AbcKeyCode => Key::D3,
             "3" => Key::D3,
+            "#" => Key::Hash,
+            "4" | "$" if kim == KIM::AbcKeyCode => Key::D4,
             "4" => Key::D4,
+            "$" => Key::Dollar,
+            "5" | "%" if kim == KIM::AbcKeyCode => Key::D5,
             "5" => Key::D5,
+            "%" => Key::Percent,
+            "6" | "^" if kim == KIM::AbcKeyCode => Key::D6,
             "6" => Key::D6,
+            "^" => Key::Caret,
+            "7" | "&" if kim == KIM::AbcKeyCode => Key::D7,
             "7" => Key::D7,
+            "&" => Key::Ampersand,
+            "8" | "*" if kim == KIM::AbcKeyCode => Key::D8,
             "8" => Key::D8,
+            "*" => Key::Asterisk,
+            "9" | "(" if kim == KIM::AbcKeyCode => Key::D9,
             "9" => Key::D9,
-            "a" => Key::A,
-            "b" => Key::B,
-            "c" => Key::C,
-            "d" => Key::D,
-            "e" => Key::E,
-            "f" => Key::F,
-            "g" => Key::G,
-            "h" => Key::H,
-            "i" => Key::I,
-            "j" => Key::J,
-            "k" => Key::K,
-            "l" => Key::L,
-            "m" => Key::M,
-            "n" => Key::N,
-            "o" => Key::O,
-            "p" => Key::P,
-            "q" => Key::Q,
-            "r" => Key::R,
-            "s" => Key::S,
-            "t" => Key::T,
-            "u" => Key::U,
-            "v" => Key::V,
-            "w" => Key::W,
-            "x" => Key::X,
-            "y" => Key::Y,
-            "z" => Key::Z,
+            "(" => Key::LeftParen,
+            "a" | "A" => Key::A,
+            "b" | "B" => Key::B,
+            "c" | "C" => Key::C,
+            "d" | "D" => Key::D,
+            "e" | "E" => Key::E,
+            "f" | "F" => Key::F,
+            "g" | "G" => Key::G,
+            "h" | "H" => Key::H,
+            "i" | "I" => Key::I,
+            "j" | "J" => Key::J,
+            "k" | "K" => Key::K,
+            "l" | "L" => Key::L,
+            "m" | "M" => Key::M,
+            "n" | "N" => Key::N,
+            "o" | "O" => Key::O,
+            "p" | "P" => Key::P,
+            "q" | "Q" => Key::Q,
+            "r" | "R" => Key::R,
+            "s" | "S" => Key::S,
+            "t" | "T" => Key::T,
+            "u" | "U" => Key::U,
+            "v" | "V" => Key::V,
+            "w" | "W" => Key::W,
+            "x" | "X" => Key::X,
+            "y" | "Y" => Key::Y,
+            "z" | "Z" => Key::Z,
+            "'" | "\"" if kim == KIM::AbcKeyCode => Key::Quote,
+            "'" => Key::Quote,
+            "\"" => Key::Quotedbl,
+            ";" | ":" if kim == KIM::AbcKeyCode => Key::Semicolon,
+            ";" => Key::Semicolon,
+            ":" => Key::Colon,
+            "[" | "{" if kim == KIM::AbcKeyCode => Key::LeftBracket,
+            "[" => Key::LeftBracket,
+            "{" => Key::NumPadLeftBrace,
+            "]" | "}" if kim == KIM::AbcKeyCode => Key::RightBracket,
+            "]" => Key::RightBracket,
+            "}" => Key::NumPadRightBrace,
+            "\\" | "|" if kim == KIM::AbcKeyCode => Key::Backslash,
+            "\\" => Key::Backslash,
+            "|" => Key::NumPadVerticalBar,
+            "," | "<" if kim == KIM::AbcKeyCode => Key::Comma,
+            "," => Key::Comma,
+            "<" => Key::Less,
+            "." | ">" if kim == KIM::AbcKeyCode => Key::Period,
+            "." => Key::Period,
+            ">" => Key::Greater,
+            "/" | "?" if kim == KIM::AbcKeyCode => Key::Slash,
+            "/" => Key::Slash,
+            "?" => Key::Question,
+            "`" | "~" if kim == KIM::AbcKeyCode => Key::Backquote,
+            "`" => Key::Backquote,
+            // Piston v1.0 does not support `~` using modifier.
+            // Use `KeyboardIgnoreModifiers::AbcKeyCode` on window to fix this issue.
+            // It will be mapped to `Key::Backquote`.
+            "~" => Key::Unknown,
             _ => Key::Unknown,
         }
         Named(Escape) => Key::Escape,
@@ -469,109 +605,124 @@ fn map_key(input: &winit::event::KeyEvent) -> Key {
     }
 }
 
-fn map_keyboard_input(input: &winit::event::KeyEvent) -> Event {
-    let key = map_key(input);
+fn map_keyboard_input(
+    input: &winit::event::KeyEvent,
+    kim: KeyboardIgnoreModifiers,
+    unknown: &mut bool,
+    last_key_pressed: &mut Option<Key>,
+) -> Option<Input> {
+    let key = map_key(input, kim);
 
     let state = if input.state == ElementState::Pressed {
+        // Filter repeated key presses (does not affect text repeat when holding keys).
+        if let Some(last_key) = &*last_key_pressed {
+            if last_key == &key {
+                *unknown = true;
+                return None;
+            }
+        }
+        *last_key_pressed = Some(key);
+
         ButtonState::Press
     } else {
+        if let Some(last_key) = &*last_key_pressed {
+            if last_key == &key {
+                *last_key_pressed = None;
+            }
+        }
         ButtonState::Release
     };
 
-    Event::Input(
-        Input::Button(ButtonArgs {
-            state: state,
-            button: Button::Keyboard(key),
-            scancode: if let winit::keyboard::PhysicalKey::Code(code) = input.physical_key {
-                    Some(code as i32)
-                } else {None},
-        }),
-        None,
-    )
+    Some(Input::Button(ButtonArgs {
+        state: state,
+        button: Button::Keyboard(key),
+        scancode: if let winit::keyboard::PhysicalKey::Code(code) = input.physical_key {
+                Some(code as i32)
+            } else {None},
+    }))
 }
 
-fn map_mouse_button(button: WinitMouseButton) -> MouseButton {
-    match button {
-        WinitMouseButton::Left => MouseButton::Left,
-        WinitMouseButton::Right => MouseButton::Right,
-        WinitMouseButton::Middle => MouseButton::Middle,
-        WinitMouseButton::Other(4) => MouseButton::X1,
-        WinitMouseButton::Other(5) => MouseButton::X2,
-        WinitMouseButton::Other(6) => MouseButton::Button6,
-        WinitMouseButton::Other(7) => MouseButton::Button7,
-        WinitMouseButton::Other(8) => MouseButton::Button8,
-        _ => MouseButton::Unknown,
+/// Maps Winit's mouse button to Piston's mouse button.
+pub fn map_mouse(mouse_button: winit::event::MouseButton) -> MouseButton {
+    use winit::event::MouseButton as M;
+
+    match mouse_button {
+        M::Left => MouseButton::Left,
+        M::Right => MouseButton::Right,
+        M::Middle => MouseButton::Middle,
+        M::Other(0) => MouseButton::X1,
+        M::Other(1) => MouseButton::X2,
+        M::Other(2) => MouseButton::Button6,
+        M::Other(3) => MouseButton::Button7,
+        M::Other(4) => MouseButton::Button8,
+        _ => MouseButton::Unknown
     }
 }
 
-/// Converts a winit's [`WindowEvent`] into a piston's [`Event`].
+/// Converts a winit's [`WindowEvent`] into a piston's [`Input`].
 ///
 /// For some events that will not be passed to the user, returns `None`.
-fn map_window_event(window_event: WindowEvent, scale_factor: f64) -> Option<Event> {
+fn map_window_event(
+    window_event: WindowEvent,
+    scale_factor: f64,
+    kim: KeyboardIgnoreModifiers,
+    unknown: &mut bool,
+    last_key_pressed: &mut Option<Key>,
+) -> Option<Input> {
     use input::FileDrag;
 
     match window_event {
         WindowEvent::DroppedFile(path) =>
-            Some(Event::Input(Input::FileDrag(FileDrag::Drop(path)), None)),
+            Some(Input::FileDrag(FileDrag::Drop(path))),
         WindowEvent::HoveredFile(path) =>
-            Some(Event::Input(Input::FileDrag(FileDrag::Hover(path)), None)),
+            Some(Input::FileDrag(FileDrag::Hover(path))),
         WindowEvent::HoveredFileCancelled =>
-            Some(Event::Input(Input::FileDrag(FileDrag::Cancel), None)),
-        WindowEvent::Resized(size) => Some(Event::Input(
-            Input::Resize(ResizeArgs {
-                window_size: [size.width as f64, size.height as f64],
-                draw_size: Size {
-                    width: size.width as f64,
-                    height: size.height as f64,
-                }
-                .into(),
-            }),
-            None,
-        )),
+            Some(Input::FileDrag(FileDrag::Cancel)),
+        WindowEvent::Resized(size) => Some(Input::Resize(ResizeArgs {
+            window_size: [size.width as f64, size.height as f64],
+            draw_size: Size {
+                width: size.width as f64,
+                height: size.height as f64,
+            }
+            .into(),
+        })),
         // TODO: Implement this
         WindowEvent::Moved(_) => None,
-        WindowEvent::CloseRequested => Some(Event::Input(Input::Close(CloseArgs), None)),
-        WindowEvent::Destroyed => Some(Event::Input(Input::Close(CloseArgs), None)),
-        WindowEvent::Focused(focused) => Some(Event::Input(Input::Focus(focused), None)),
+        WindowEvent::CloseRequested => Some(Input::Close(CloseArgs)),
+        WindowEvent::Destroyed => Some(Input::Close(CloseArgs)),
+        WindowEvent::Focused(focused) => Some(Input::Focus(focused)),
         WindowEvent::KeyboardInput { ref event, .. } => {
-            Some(map_keyboard_input(event))
+            map_keyboard_input(event, kim, unknown, last_key_pressed)
         }
         // TODO: Implement this
         WindowEvent::ModifiersChanged(_) => None,
         WindowEvent::CursorMoved { position, .. } => {
             let position = position.to_logical(scale_factor);
-            Some(Event::Input(
-                Input::Move(Motion::MouseCursor([position.x, position.y])),
-                None,
-            ))
+            Some(Input::Move(Motion::MouseCursor([position.x, position.y])))
         }
-        WindowEvent::CursorEntered { .. } => Some(Event::Input(Input::Cursor(true), None)),
-        WindowEvent::CursorLeft { .. } => Some(Event::Input(Input::Cursor(false), None)),
-        WindowEvent::MouseWheel { delta, .. } => Some(match delta {
+        WindowEvent::CursorEntered { .. } => Some(Input::Cursor(true)),
+        WindowEvent::CursorLeft { .. } => Some(Input::Cursor(false)),
+        WindowEvent::MouseWheel { delta, .. } => match delta {
             MouseScrollDelta::PixelDelta(position) => {
                 let position = position.to_logical(scale_factor);
-                Event::Input(Input::Move(Motion::MouseScroll([position.x, position.y])), None)
+                Some(Input::Move(Motion::MouseScroll([position.x, position.y])))
             }
-            MouseScrollDelta::LineDelta(x, y) => {
-                Event::Input(Input::Move(Motion::MouseScroll([x as f64, y as f64])), None)
-            }
-        }),
-        WindowEvent::MouseInput { state, button, .. } => Some({
-            let button = map_mouse_button(button);
+            MouseScrollDelta::LineDelta(x, y) =>
+                Some(Input::Move(Motion::MouseScroll([x as f64, y as f64]))),
+        },
+        WindowEvent::MouseInput { state, button, .. } => {
+            let button = map_mouse(button);
             let state = match state {
                 ElementState::Pressed => ButtonState::Press,
                 ElementState::Released => ButtonState::Release,
             };
 
-            Event::Input(
-                Input::Button(ButtonArgs {
-                    state,
-                    button: Button::Mouse(button),
-                    scancode: None,
-                }),
-                None,
-            )
-        }),
+            Some(Input::Button(ButtonArgs {
+                state,
+                button: Button::Mouse(button),
+                scancode: None,
+            }))
+        }
         // TODO: Implement this
         WindowEvent::TouchpadPressure { .. } |
         WindowEvent::PinchGesture { .. } |
