@@ -509,7 +509,6 @@ fn map_key(input: &winit::event::KeyEvent, kim: KeyboardIgnoreModifiers) -> Key 
     use winit::keyboard::Key::*;
     use KeyboardIgnoreModifiers as KIM;
 
-    // TODO: Complete the lookup match
     match input.logical_key {
         Character(ref ch) => match ch.as_str() {
             "0" | ")" if kim == KIM::AbcKeyCode => Key::D0,
@@ -722,16 +721,12 @@ fn map_window_event(
             }
             .into(),
         })),
-        // TODO: Implement this
-        WindowEvent::Moved(_) => None,
         WindowEvent::CloseRequested => Some(Input::Close(CloseArgs)),
         WindowEvent::Destroyed => Some(Input::Close(CloseArgs)),
         WindowEvent::Focused(focused) => Some(Input::Focus(focused)),
         WindowEvent::KeyboardInput { ref event, .. } => {
             map_keyboard_input(event, kim, unknown, last_key_pressed)
         }
-        // TODO: Implement this
-        WindowEvent::ModifiersChanged(_) => None,
         WindowEvent::CursorMoved { position, .. } => {
             let position = position.to_logical(scale_factor);
             Some(Input::Move(Motion::MouseCursor([position.x, position.y])))
@@ -759,12 +754,6 @@ fn map_window_event(
                 scancode: None,
             }))
         }
-        // TODO: Implement this
-        WindowEvent::TouchpadPressure { .. } |
-        WindowEvent::PinchGesture { .. } |
-        WindowEvent::RotationGesture { .. } |
-        WindowEvent::PanGesture { .. } |
-        WindowEvent::DoubleTapGesture { .. } => None,
         WindowEvent::AxisMotion { device_id, axis, value } => {
             use input::ControllerAxisArgs;
 
@@ -797,17 +786,21 @@ fn map_window_event(
                 }
             ))))
         }
-        // TODO: Implement this
+        // Events not built-in by Piston v1.0.
+        // It is possible to use Piston's `Event::Custom`.
+        // This might be added as a library in the future to Piston's ecosystem.
+        WindowEvent::TouchpadPressure { .. } |
+        WindowEvent::PinchGesture { .. } |
+        WindowEvent::RotationGesture { .. } |
+        WindowEvent::PanGesture { .. } |
+        WindowEvent::DoubleTapGesture { .. } => None,
         WindowEvent::ScaleFactorChanged { .. } => None,
-        // TODO: Implement this
         WindowEvent::ActivationTokenDone { .. } => None,
-        // TODO: Implement this
         WindowEvent::ThemeChanged(_) => None,
-        // TODO: Implement this
         WindowEvent::Ime(_) => None,
-        // TODO: Implement this
         WindowEvent::Occluded(_) => None,
-        // TODO: Implement this
         WindowEvent::RedrawRequested { .. } => None,
+        WindowEvent::Moved(_) => None,
+        WindowEvent::ModifiersChanged(_) => None,
     }
 }
