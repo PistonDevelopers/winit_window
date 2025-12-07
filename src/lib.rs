@@ -5,6 +5,7 @@ extern crate window;
 extern crate winit;
 
 use std::sync::Arc;
+use rustc_hash::FxHashMap;
 
 use input::{
     Button, ButtonArgs, ButtonState, CloseArgs, Event, Input, Key, Motion, MouseButton, ResizeArgs,
@@ -15,6 +16,7 @@ use winit::{
     application::ApplicationHandler,
     dpi::{LogicalPosition, LogicalSize},
     event::{
+        DeviceId,
         ElementState,
         MouseScrollDelta,
         WindowEvent,
@@ -87,6 +89,11 @@ pub struct WinitWindow {
     /// Winit to call `ApplicationHandler::request_redraw`,
     /// which creates the window.
     pub window: Option<Arc<winit::window::Window>>,
+    // Keeps track of connected devices.
+    pub devices: u32,
+    // Maps device id to a unique id used by Piston.
+    pub device_id_map: FxHashMap<DeviceId, u32>,
+    // The window settings that created the window.
     settings: WindowSettings,
     // The back-end does not remember the title.
     title: String,
@@ -132,6 +139,9 @@ impl WinitWindow {
             mouse_relative: None,
             title: settings.get_title(),
             exit_on_esc: settings.get_exit_on_esc(),
+
+            devices: 0,
+            device_id_map: FxHashMap::default(),
         };
         // Causes the window to be created through `ApplicationHandler::request_redraw`.
         if let Some(e) = w.poll_event() {w.events.push_front(e)}
@@ -189,6 +199,8 @@ impl WinitWindow {
                             self.keyboard_ignore_modifiers,
                             unknown,
                             &mut self.last_key_pressed,
+                            &mut self.devices,
+                            &mut self.device_id_map,
                         ) {
                             self.events.push_back(Event::Input(input, None));
                         }
@@ -245,6 +257,8 @@ impl WinitWindow {
             self.keyboard_ignore_modifiers,
             unknown,
             &mut self.last_key_pressed,
+            &mut self.devices,
+            &mut self.device_id_map,
         );
 
         let pre_event = self.pre_pop_front_event();
@@ -688,6 +702,8 @@ fn map_window_event(
     kim: KeyboardIgnoreModifiers,
     unknown: &mut bool,
     last_key_pressed: &mut Option<Key>,
+    devices: &mut u32,
+    device_id_map: &mut FxHashMap<DeviceId, u32>,
 ) -> Option<Input> {
     use input::FileDrag;
 
@@ -749,8 +765,23 @@ fn map_window_event(
         WindowEvent::RotationGesture { .. } |
         WindowEvent::PanGesture { .. } |
         WindowEvent::DoubleTapGesture { .. } => None,
-        // TODO: Implement this
-        WindowEvent::AxisMotion { .. } => None,
+        WindowEvent::AxisMotion { device_id, axis, value } => {
+            use input::ControllerAxisArgs;
+
+            Some(Input::Move(Motion::ControllerAxis(ControllerAxisArgs::new(
+                {
+                    if let Some(id) = device_id_map.get(&device_id) {*id}
+                    else {
+                        let id = *devices;
+                        *devices += 1;
+                        device_id_map.insert(device_id, id);
+                        id
+                    }
+                },
+                axis as u8,
+                value,
+            ))))
+        }
         WindowEvent::Touch(winit::event::Touch { phase, location, id, .. }) => {
             use winit::event::TouchPhase;
             use input::{Touch, TouchArgs};
