@@ -13,14 +13,14 @@ use std::{collections::VecDeque, error::Error, time::Duration};
 use window::{AdvancedWindow, BuildFromWindowSettings, Position, Size, Window, WindowSettings};
 use winit::{
     application::ApplicationHandler,
-    dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
+    dpi::{LogicalPosition, LogicalSize},
     event::{
         ElementState,
         MouseScrollDelta,
         WindowEvent,
     },
     event_loop::{ActiveEventLoop, EventLoop},
-    window::{CursorGrabMode, WindowId},
+    window::WindowId,
 };
 
 /// Settings for whether to ignore modifiers and use standard keyboard layouts instead.
@@ -93,9 +93,13 @@ pub struct WinitWindow {
     exit_on_esc: bool,
     should_close: bool,
     automatic_close: bool,
-    last_cursor: LogicalPosition<f64>,
-    cursor_accumulator: LogicalPosition<f64>,
-    capture_cursor: bool,
+    // Used to fake capturing of cursor,
+    // to get relative mouse events.
+    is_capturing_cursor: bool,
+    // Stores the last known cursor position.
+    last_cursor_pos: Option<[f64; 2]>,
+    // Stores relative coordinates to emit on next poll.
+    mouse_relative: Option<(f64, f64)>,
     // Used to filter repeated key presses (does not affect text repeat).
     last_key_pressed: Option<input::Key>,
     // Stores list of events ready for processing.
@@ -122,12 +126,11 @@ impl WinitWindow {
             should_close: false,
             automatic_close: settings.get_automatic_close(),
             events: VecDeque::new(),
-            last_cursor: LogicalPosition::new(0.0, 0.0),
-            cursor_accumulator: LogicalPosition::new(0.0, 0.0),
             last_key_pressed: None,
-
+            is_capturing_cursor: false,
+            last_cursor_pos: None,
+            mouse_relative: None,
             title: settings.get_title(),
-            capture_cursor: false,
             exit_on_esc: settings.get_exit_on_esc(),
         };
         // Causes the window to be created through `ApplicationHandler::request_redraw`.
@@ -147,10 +150,23 @@ impl WinitWindow {
         self.window.as_ref().unwrap().clone()
     }
 
+    // These events are emitted before popping a new event from the queue.
+    // This is because Piston handles some events separately.
+    fn pre_pop_front_event(&mut self) -> Option<Input> {
+        use input::Motion;
+
+        // Check for a pending relative mouse move event.
+        if let Some((x, y)) = self.mouse_relative {
+            self.mouse_relative = None;
+            return Some(Input::Move(Motion::MouseRelative([x, y])));
+        }
+
+        None
+    }
+
     fn handle_event(
         &mut self,
         event: winit::event::WindowEvent,
-        center: PhysicalPosition<f64>,
         unknown: &mut bool,
     ) -> Option<Input> {
         use winit::keyboard::{Key, NamedKey};
@@ -182,35 +198,79 @@ impl WinitWindow {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                if self.capture_cursor {
-                    let prev_last_cursor = self.last_cursor;
-                    self.last_cursor =
-                        position.to_logical(self.get_window_ref().scale_factor());
+                let scale = self.get_window_ref().scale_factor();
+                let position = position.to_logical::<f64>(scale);
+                let x = f64::from(position.x);
+                let y = f64::from(position.y);
 
-                    // Don't track distance if the position is at the center, this probably is
-                    //  from cursor center lock, or irrelevant.
-                    if position == center {
+                let pre_event = self.pre_pop_front_event();
+                let mut input = || {
+                    if let Some(pos) = self.last_cursor_pos {
+                        let dx = x - pos[0];
+                        let dy = y - pos[1];
+                        if self.is_capturing_cursor {
+                            self.last_cursor_pos = Some([x, y]);
+                            self.fake_capture();
+                            // Skip normal mouse movement and emit relative motion only.
+                            return Some(Input::Move(Motion::MouseRelative([dx as f64, dy as f64])));
+                        }
+                        // Send relative mouse movement next time.
+                        self.mouse_relative = Some((dx as f64, dy as f64));
+                    } else if self.is_capturing_cursor {
+                        // Ignore this event since mouse positions
+                        // should not be emitted when capturing cursor.
+                        self.last_cursor_pos = Some([x, y]);
                         return None;
                     }
 
-                    // Add the distance to the tracked cursor movement
-                    self.cursor_accumulator.x += position.x - prev_last_cursor.x as f64;
-                    self.cursor_accumulator.y += position.y - prev_last_cursor.y as f64;
+                    self.last_cursor_pos = Some([x, y]);
+                    return Some(Input::Move(Motion::MouseCursor([x, y])))
+                };
 
-                    return None;
-                }
+                let input = input();
+                return if pre_event.is_some() {
+                    if let Some(input) = input {
+                        self.events.push_back(Event::Input(input, None));
+                    }
+                    pre_event
+                } else {input}
             }
             _ => {}
         }
 
         // Usual events are handled here and passed to user.
-        map_window_event(
+        let input = map_window_event(
             event,
             self.get_window_ref().scale_factor(),
             self.keyboard_ignore_modifiers,
             unknown,
             &mut self.last_key_pressed,
-        )
+        );
+
+        let pre_event = self.pre_pop_front_event();
+        if pre_event.is_some() {
+            if let Some(input) = input {
+                self.events.push_back(Event::Input(input, None));
+            }
+            pre_event
+        } else {input}
+    }
+
+    fn fake_capture(&mut self) {
+        if let Some(pos) = self.last_cursor_pos {
+            // Fake capturing of cursor.
+            let size = self.size();
+            let cx = size.width / 2.0;
+            let cy = size.height / 2.0;
+            let dx = cx - pos[0];
+            let dy = cy - pos[1];
+            if dx != 0.0 || dy != 0.0 {
+                let pos = winit::dpi::LogicalPosition::new(cx, cy);
+                if let Ok(_) = self.get_window_ref().set_cursor_position(pos) {
+                    self.last_cursor_pos = Some([cx, cy]);
+                }
+            }
+        }
     }
 }
 
@@ -230,32 +290,7 @@ impl Window for WinitWindow {
         ((w as f64 / hidpi) as u32, (h as f64 / hidpi) as u32).into()
     }
 
-    fn swap_buffers(&mut self) {
-        // This window backend was made for use with a vulkan renderer that handles swapping by
-        //  itself, if you need it here open up an issue. What we can use this for however is
-        //  detecting the end of a frame, which we can use to gather up cursor_accumulator data.
-
-        if self.capture_cursor {
-            let center: (f64, f64) = self.get_window_ref().inner_size().into();
-            let mut center: PhysicalPosition<f64> = center.into();
-            center.x /= 2.;
-            center.y /= 2.;
-
-            // Center-lock the cursor if we're using capture_cursor
-            self.get_window_ref().set_cursor_position(center).unwrap();
-
-            // Create a relative input based on the distance from the center
-            self.events.push_back(Event::Input(
-                Input::Move(Motion::MouseRelative([
-                    self.cursor_accumulator.x,
-                    self.cursor_accumulator.y,
-                ])),
-                None,
-            ));
-
-            self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
-        }
-    }
+    fn swap_buffers(&mut self) {}
 
     fn wait_event(&mut self) -> Event {
         use winit::platform::pump_events::EventLoopExtPumpEvents;
@@ -371,13 +406,8 @@ impl ApplicationHandler<UserEvent> for WinitWindow {
                     window.request_redraw();
                 },
                 event => {
-                    let center: (f64, f64) = self.get_window_ref().inner_size().into();
-                    let mut center: PhysicalPosition<f64> = center.into();
-                    center.x /= 2.;
-                    center.y /= 2.;
-
                     let mut unknown = false;
-                    if let Some(ev) = self.handle_event(event, center, &mut unknown) {
+                    if let Some(ev) = self.handle_event(event, &mut unknown) {
                         if !unknown {
                             self.events.push_back(Event::Input(ev, None));
                         }
@@ -406,26 +436,16 @@ impl AdvancedWindow for WinitWindow {
     }
 
     fn set_capture_cursor(&mut self, value: bool) {
-        // If we're already doing this, just don't do anything
-        if value == self.capture_cursor {
-            return;
-        }
-
+        // Normally we would call `.set_cursor_grab`
+        // but since relative mouse events does not work,
+        // because device deltas have unspecified coordinates,
+        // the capturing of cursor is faked by hiding the cursor
+        // and setting the position to the center of window.
+        self.is_capturing_cursor = value;
+        self.get_window_ref().set_cursor_visible(!value);
         if value {
-            self.cursor_accumulator = LogicalPosition::new(0.0, 0.0);
-            let window = self.get_window_ref();
-            window.set_cursor_grab(CursorGrabMode::Locked).unwrap();
-            window.set_cursor_visible(false);
-            let mut center = window.inner_size().cast::<f64>();
-            center.width /= 2.;
-            center.height /= 2.;
-            self.last_cursor = LogicalPosition::new(center.width, center.height);
-        } else {
-            let window = self.get_window_ref();
-            window.set_cursor_grab(CursorGrabMode::None).unwrap();
-            window.set_cursor_visible(true);
+            self.fake_capture();
         }
-        self.capture_cursor = value;
     }
 
     fn get_automatic_close(&self) -> bool {self.automatic_close}
