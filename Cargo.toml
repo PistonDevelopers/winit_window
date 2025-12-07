@@ -24,6 +24,7 @@ path = "src/lib.rs"
 winit = "0.30.12"
 pistoncore-input = "1.0.0"
 pistoncore-window = "1.0.0"
+rustc-hash = "2.1.1"
 
 [dev-dependencies]
 piston = "1.0.0"
