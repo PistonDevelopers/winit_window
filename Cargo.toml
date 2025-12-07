@@ -1,6 +1,6 @@
 [package]
 name = "pistoncore-winit_window"
-version = "0.19.2"
+version = "0.20.0"
 authors = [
   "Layl <LaylConway@users.noreply.github.com>",
   "Sven Nilsen <bvssvni@gmail.com",
