@@ -1,4 +1,5 @@
-//! A [winit](https://crates.io/crates/winit) window back-end for the Piston game engine.
+#![deny(missing_docs)]
+#![doc = include_str!("../README.md")]
 
 extern crate input;
 extern crate window;
@@ -70,6 +71,7 @@ pub enum KeyboardIgnoreModifiers {
     AbcKeyCode,
 }
 
+/// Winit window backend for Piston.
 pub struct WinitWindow {
     /// The event loop of the window.
     ///
@@ -89,9 +91,9 @@ pub struct WinitWindow {
     /// Winit to call `ApplicationHandler::request_redraw`,
     /// which creates the window.
     pub window: Option<Arc<winit::window::Window>>,
-    // Keeps track of connected devices.
+    /// Keeps track of connected devices.
     pub devices: u32,
-    // Maps device id to a unique id used by Piston.
+    /// Maps device id to a unique id used by Piston.
     pub device_id_map: FxHashMap<DeviceId, u32>,
     // The window settings that created the window.
     settings: WindowSettings,
@@ -121,6 +123,7 @@ pub enum UserEvent {
 }
 
 impl WinitWindow {
+    /// Creates a new window with window settings.
     pub fn new(settings: &WindowSettings) -> Self {
         let event_loop = EventLoop::with_user_event().build().unwrap();
 
