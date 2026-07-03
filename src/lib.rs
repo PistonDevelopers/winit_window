@@ -193,12 +193,12 @@ impl WinitWindow {
                     }
                 }
                 if let Some(s) = &ev.text {
-                    // Do not emit text event on key release.
-                    if let ElementState::Released = ev.state {
-                        return None;
-                    }
+                    let state = ev.state;
+                    // Copy string, but avoid allocation.
+                    let s = if let ElementState::Released = state {
+                        s.to_string()
+                    } else {String::new()};
                     
-                    let s = s.to_string();
                     let repeat = ev.repeat;
                     if !repeat {
                         if let Some(input) = map_window_event(
@@ -212,6 +212,11 @@ impl WinitWindow {
                         ) {
                             self.events.push_back(Event::Input(input, None));
                         }
+                    }
+
+                    // Do not emit text event on key release.
+                    if let ElementState::Released = state {
+                        return None;
                     }
 
                     return Some(Input::Text(s));
