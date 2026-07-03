@@ -194,10 +194,11 @@ impl WinitWindow {
                 }
                 if let Some(s) = &ev.text {
                     let state = ev.state;
-                    // Copy string, but avoid allocation.
+                    // Copy string for text events,
+                    // but avoid allocation on key release.
                     let s = if let ElementState::Released = state {
-                        s.to_string()
-                    } else {String::new()};
+                        String::new()
+                    } else {s.to_string()};
                     
                     let repeat = ev.repeat;
                     if !repeat {
