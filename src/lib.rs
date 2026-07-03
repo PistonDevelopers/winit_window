@@ -193,6 +193,11 @@ impl WinitWindow {
                     }
                 }
                 if let Some(s) = &ev.text {
+                    // Do not emit text event on key release.
+                    if let ElementState::Released = ev.state {
+                        return None;
+                    }
+                    
                     let s = s.to_string();
                     let repeat = ev.repeat;
                     if !repeat {
